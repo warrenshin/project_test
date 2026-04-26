@@ -1,0 +1,5 @@
+streamlit
+pandas
+matplotlib
+feedparser
+deep-translator
