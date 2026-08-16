@@ -29,8 +29,9 @@ app/
 ├─ domain/
 │  ├─ *.py              # SQLAlchemy 도메인 모델 (user, market, portfolio, journal, policy)
 │  └─ services/
-│     ├─ execution.py    # 모의 체결 엔진 (6.7) — build_quote, execute_order
-│     └─ market_data.py  # 시장 데이터 provider 추상화·검증·upsert (6.4)
+│     ├─ execution.py     # 모의 체결 엔진 (6.7) — build_quote, execute_order
+│     ├─ market_data.py   # 시장 데이터 provider 추상화·검증·upsert (6.4)
+│     └─ gamification.py  # XP 산정 규칙 (6.3) — 일일 상한, 이벤트당 1회 지급
 ├─ scripts/
 │  └─ ingest_market_data.py  # 수동 시세 수집 CLI (라이브 미검증, README 참고)
 └─ workers/            # (미사용) 비동기 작업 placeholder — 실제 체결은 아직 API 요청 안에서 동기 실행
@@ -56,7 +57,15 @@ alembic/                # DB 마이그레이션
   `services/market-data-worker/README.md` 참고 — 이 세션에서는 라이브 수집을
   검증하지 못해 정적 샘플 4종목(seed-sample)만 조회 가능하다. fundamentals는 아직
   501 스텁이다.
-- 나머지 `api/v1/*` 라우터(학습, 일지, AI)는 명세서(`docs/product-spec.md`)
+- **learning** (`/v1/learning/paths`, `/v1/lessons/*`, `/v1/quizzes/*`,
+  `/v1/me/learning-summary`) — 구현 완료: LearningPath>Course>Module>Lesson 계층,
+  콘텐츠 블록(학습목표·본문·예시·핵심요약), 퀴즈 채점(정답 선택지 집합 비교, 오답
+  해설 포함), 진도 기록, 서버 계산 XP(6.3 — 완료 이벤트당 1회만 지급, 일일 상한
+  적용). 콘텐츠는 1~5강만 시드되어 있다 (`content/courses/README.md` 참고).
+  **아직 없는 것**: 콘텐츠 게시 승인 워크플로(초안→검수→승인, 11.1)는 status 필드
+  수준만 있고, 7일/28일 챌린지·배지·스트릭 보상 UI는 구현하지 않았다(스트릭 일수
+  자체는 `/me/learning-summary`에서 XP 지급일 기준으로 계산해 제공).
+- 나머지 `api/v1/*` 라우터(일지, AI)는 명세서(`docs/product-spec.md`)
   9.2 엔드포인트 목록에 맞춘 스텁이다. 각 파일 상단 docstring에 해당 Phase와 명세서
   절 번호를 표시했다.
 

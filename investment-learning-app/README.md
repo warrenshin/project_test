@@ -101,5 +101,7 @@ uvicorn app.main:app --reload
 - [x] 시장 데이터: 종목 검색·상세·bars API 구현. **단, 라이브 수집은 이 개발 세션의
       샌드박스 egress 정책상 검증하지 못함** — 지금은 데모용 정적 샘플 4종목만 조회
       가능 (`services/market-data-worker/README.md` 참고, 운영 투입 전 재검증 필요)
-- [ ] 학습 엔진 MVP (Phase 2)
+- [x] Phase 2 핵심: 학습 엔진 (콘텐츠 계층, 진도, 퀴즈 채점, 서버 계산 XP·연속학습일).
+      1~5강 시드 완료, 6~30강 콘텐츠 작성과 챌린지/배지는 후속 작업으로 남음
+      (`content/courses/README.md` 참고)
 - [ ] 투자일지·AI 코칭 MVP (Phase 4)
