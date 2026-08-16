@@ -99,6 +99,25 @@ def create_pre_trade_journal(
     return JournalResponse.model_validate(journal, from_attributes=True)
 
 
+@router.get("/me/journals", response_model=list[JournalResponse])
+def list_my_journals(db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """일지 목록 조회. 명세서 9.2에 명시적 목록은 없지만, 프런트엔드 일지 화면에 필요하다."""
+    journals = (
+        db.query(JournalEntry)
+        .filter(JournalEntry.user_id == current_user.id)
+        .order_by(JournalEntry.created_at.desc())
+        .all()
+    )
+    return [JournalResponse.model_validate(j, from_attributes=True) for j in journals]
+
+
+@router.get("/journals/{journal_id}", response_model=JournalResponse)
+def get_journal(journal_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """일지 단건 조회. 명세서 9.2에 명시적 엔드포인트는 없지만, 프런트엔드 일지 화면에 필요하다."""
+    journal = _get_owned_journal(db, journal_id, current_user)
+    return JournalResponse.model_validate(journal, from_attributes=True)
+
+
 @router.patch("/journals/{journal_id}", response_model=JournalResponse)
 def update_journal(
     journal_id: UUID,

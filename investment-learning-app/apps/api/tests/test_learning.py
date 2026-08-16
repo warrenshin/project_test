@@ -108,6 +108,23 @@ def test_quiz_pass_flow(db):
     assert summary["total_xp"] == 15
 
 
+def test_get_quiz_returns_questions_without_correct_answer():
+    token, _ = signup_user("quizreader")
+    lesson_id = _find_first_lesson_id()
+    detail = client.get(f"/v1/lessons/{lesson_id}", headers=_auth(token)).json()
+    quiz_id = detail["quiz"]["id"]
+
+    res = client.get(f"/v1/quizzes/{quiz_id}", headers=_auth(token))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["id"] == quiz_id
+    assert len(body["questions"]) == 2
+    for question in body["questions"]:
+        assert question["choices"]
+        for choice in question["choices"]:
+            assert "is_correct" not in choice
+
+
 def test_daily_xp_cap_enforced(db):
     from app.domain.services import gamification
     import uuid as uuid_module

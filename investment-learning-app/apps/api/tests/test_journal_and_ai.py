@@ -8,6 +8,72 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _idem_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())}
+
+
+def test_list_and_get_my_journals(db):
+    token, portfolio_id = signup_user("journallister")
+    instrument = seed_instrument_with_bar(db, "035420", "KRX", "KRW", close=200_000)
+
+    create_res = client.post(
+        "/v1/journals/pre-trade",
+        json={
+            "portfolio_id": portfolio_id,
+            "instrument_id": str(instrument.id),
+            "thesis": "검색 점유율 확대",
+            "counter_evidence": ["광고 경쟁 심화"],
+        },
+        headers=_auth(token),
+    )
+    assert create_res.status_code == 201, create_res.text
+    journal_id = create_res.json()["id"]
+
+    list_res = client.get("/v1/me/journals", headers=_auth(token))
+    assert list_res.status_code == 200
+    ids = [j["id"] for j in list_res.json()]
+    assert journal_id in ids
+
+    get_res = client.get(f"/v1/journals/{journal_id}", headers=_auth(token))
+    assert get_res.status_code == 200
+    assert get_res.json()["thesis"] == "검색 점유율 확대"
+
+
+def test_order_backfills_journal_order_id_for_bias_detection(db):
+    token, portfolio_id = signup_user("backfilluser")
+    instrument = seed_instrument_with_bar(db, "003550", "KRX", "KRW", close=90_000)
+
+    journal_res = client.post(
+        "/v1/journals/pre-trade",
+        json={
+            "portfolio_id": portfolio_id,
+            "instrument_id": str(instrument.id),
+            "thesis": "지주사 저평가",
+            "counter_evidence": ["지배구조 불확실성"],
+        },
+        headers=_auth(token),
+    )
+    journal_id = journal_res.json()["id"]
+    assert journal_res.json()["order_id"] is None
+
+    order_res = client.post(
+        f"/v1/portfolios/{portfolio_id}/orders",
+        json={
+            "instrument_id": str(instrument.id),
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": "1",
+            "pre_trade_journal_id": journal_id,
+        },
+        headers=_idem_headers(token),
+    )
+    assert order_res.status_code == 201, order_res.text
+    order_id = order_res.json()["id"]
+
+    journal_after = client.get(f"/v1/journals/{journal_id}", headers=_auth(token))
+    assert journal_after.json()["order_id"] == order_id
+
+
 def test_pre_trade_journal_scores_low_without_counter_evidence(db):
     token, portfolio_id = signup_user("journaler1")
     instrument = seed_instrument_with_bar(db, "032830", "KRX", "KRW", close=60_000)
