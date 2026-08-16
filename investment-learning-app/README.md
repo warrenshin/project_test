@@ -98,5 +98,8 @@ uvicorn app.main:app --reload
 - [x] Phase 3 핵심: 모의투자 원장·주문·체결 (한국·미국 이중 시장, KR/US 수수료·세금
       정책, 8단계 주문 검증, idempotency, 포지션·성과 조회) — 장 운영시간 검증, 기업행사,
       비동기 재평가 워커는 후속 작업으로 남음 (`apps/api/README.md` 참고)
+- [x] 시장 데이터: 종목 검색·상세·bars API 구현. **단, 라이브 수집은 이 개발 세션의
+      샌드박스 egress 정책상 검증하지 못함** — 지금은 데모용 정적 샘플 4종목만 조회
+      가능 (`services/market-data-worker/README.md` 참고, 운영 투입 전 재검증 필요)
 - [ ] 학습 엔진 MVP (Phase 2)
 - [ ] 투자일지·AI 코칭 MVP (Phase 4)

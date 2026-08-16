@@ -4,13 +4,17 @@
 
 - `base.py` — 공통 베이스, UUID PK, UTC 타임스탬프 믹스인
 - `user.py` — users, profiles, consents, devices, sessions (Phase 1 인증, 구현 완료)
-- `market.py` — instruments, bars (as_of/source/delay_seconds 필수)
+- `market.py` — instruments, bars (as_of/source/delay_seconds 필수; ticker+exchange는
+  심볼 재사용을 고려해 DB unique 제약 없이 valid_to로 "현재 유효" 여부를 구분한다)
 - `portfolio.py` — portfolios, orders, fills, positions, ledger_entries (Phase 3, 구현 완료)
 - `policy.py` — fee_policies (KR/US 수수료·세금), fx_rates (Phase 3, 구현 완료 — fx_rates는
   market-data-worker가 없어 seed 플레이스홀더 값 사용 중)
 - `journal.py` — journal_entries, journal_versions
 - `services/execution.py` — 모의 체결 엔진 (6.7): 시장가·지정가 체결가 근사, 비용·환전
   계산, 평단가·실현손익 갱신을 담당하는 순수 도메인 서비스 (API 레이어와 분리)
+- `services/market_data.py` — 시장 데이터 provider 추상화(Stooq 어댑터 포함, 라이브
+  미검증)·검증(결측·이상치)·upsert (6.4). 실제로 지금 서빙되는 데이터는 시드 샘플이다
+  (services/market-data-worker/README.md 참고)
 - `constants.py` — 계정코드·원장 entry_type·주문 상태·거래소→시장 매핑 등 공용 상수
 
 Alembic 마이그레이션(`alembic/versions/`)은 위 모델 전체를 포함한다.

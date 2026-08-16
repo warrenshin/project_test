@@ -29,7 +29,10 @@ app/
 ├─ domain/
 │  ├─ *.py              # SQLAlchemy 도메인 모델 (user, market, portfolio, journal, policy)
 │  └─ services/
-│     └─ execution.py    # 모의 체결 엔진 (6.7) — build_quote, execute_order
+│     ├─ execution.py    # 모의 체결 엔진 (6.7) — build_quote, execute_order
+│     └─ market_data.py  # 시장 데이터 provider 추상화·검증·upsert (6.4)
+├─ scripts/
+│  └─ ingest_market_data.py  # 수동 시세 수집 CLI (라이브 미검증, README 참고)
 └─ workers/            # (미사용) 비동기 작업 placeholder — 실제 체결은 아직 API 요청 안에서 동기 실행
 alembic/                # DB 마이그레이션
 ```
@@ -48,7 +51,12 @@ alembic/                # DB 마이그레이션
   재평가되지 않고 ACCEPTED로 남는다 — 비동기 재평가 워커는 `services/simulation-worker`
   참고. 장 운영시간(거래소 캘린더) 검증과 기업행사(액면분할·배당 등) 반영도 아직 없다.
   FX 환율은 `market-data-worker`가 없어 seed 플레이스홀더 값(USD/KRW)을 사용한다.
-- 나머지 `api/v1/*` 라우터(학습, 종목검색, 일지, AI)는 명세서(`docs/product-spec.md`)
+- **instruments** (`/v1/instruments/*`) — 구현 완료: 종목 검색(티커·이름·거래소 필터),
+  상세(최근가·기준시각·출처·지연초), bars 조회(시간순). 실제 시세 데이터는
+  `services/market-data-worker/README.md` 참고 — 이 세션에서는 라이브 수집을
+  검증하지 못해 정적 샘플 4종목(seed-sample)만 조회 가능하다. fundamentals는 아직
+  501 스텁이다.
+- 나머지 `api/v1/*` 라우터(학습, 일지, AI)는 명세서(`docs/product-spec.md`)
   9.2 엔드포인트 목록에 맞춘 스텁이다. 각 파일 상단 docstring에 해당 Phase와 명세서
   절 번호를 표시했다.
 

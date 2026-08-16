@@ -6,7 +6,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import CHAR, Date, DateTime, ForeignKey, Numeric, String
+from sqlalchemy import CHAR, Date, DateTime, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +14,10 @@ from app.domain.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class Instrument(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """ticker+exchange에 DB unique 제약을 걸지 않는다: 심볼이 재사용될 수 있어(8.3),
+    상장폐지 후 같은 티커가 다른 종목에 배정될 수 있다. "현재 유효한" 종목 조회는
+    valid_to IS NULL 조건으로 애플리케이션에서 판단한다 (services/market_data.py)."""
+
     __tablename__ = "instruments"
 
     ticker: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -29,6 +33,9 @@ class Instrument(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class Bar(Base, UUIDPrimaryKeyMixin):
     __tablename__ = "bars"
+    __table_args__ = (
+        UniqueConstraint("instrument_id", "interval", "bar_start", name="uq_bars_instrument_interval_start"),
+    )
 
     instrument_id: Mapped[str] = mapped_column(
         UUID(as_uuid=True), ForeignKey("instruments.id"), nullable=False
