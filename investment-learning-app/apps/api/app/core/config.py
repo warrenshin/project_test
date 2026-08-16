@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     # 주문 후 단일 종목 비중이 이 값(%)을 초과하면 집중도 경고를 반환한다 (차단하지 않음).
     concentration_warning_threshold_pct: int = 30
 
+    # AI 코치 (7.5-7.7). 키가 없으면 규칙 기반 graceful degradation 경로로 동작한다 (7.7).
+    anthropic_api_key: str | None = None
+    ai_coach_simple_model: str = "claude-haiku-4-5"
+    ai_coach_complex_model: str = "claude-sonnet-5"
+    ai_coach_prompt_version: str = "v1"
+
 
 @lru_cache
 def get_settings() -> Settings:

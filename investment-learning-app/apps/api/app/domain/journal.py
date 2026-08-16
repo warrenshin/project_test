@@ -16,6 +16,7 @@ from app.domain.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class JournalEntry(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "journal_entries"
 
+    user_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     portfolio_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
     instrument_id: Mapped[str] = mapped_column(UUID(as_uuid=True), nullable=False)
     order_id: Mapped[str | None] = mapped_column(UUID(as_uuid=True), nullable=True)

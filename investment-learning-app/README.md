@@ -104,4 +104,8 @@ uvicorn app.main:app --reload
 - [x] Phase 2 핵심: 학습 엔진 (콘텐츠 계층, 진도, 퀴즈 채점, 서버 계산 XP·연속학습일).
       1~5강 시드 완료, 6~30강 콘텐츠 작성과 챌린지/배지는 후속 작업으로 남음
       (`content/courses/README.md` 참고)
-- [ ] 투자일지·AI 코칭 MVP (Phase 4)
+- [x] Phase 4 핵심: 투자일지(거래 전/후, 버전 보존)·과정 점수(7.3)·행동편향 탐지 3종
+      (확증편향·처분효과·집중위험)·AI 코치 파이프라인(검색→정량엔진→LLM→정책필터→출처
+      표시). **단, `ANTHROPIC_API_KEY`가 이 개발 세션에 설정되어 있지 않아 실제 LLM
+      호출은 검증하지 못함** — 지금은 규칙 기반 graceful degradation 경로만 실제로
+      동작을 확인했다 (`apps/api/README.md` 참고, 운영 투입 전 실제 키로 재검증 필요)

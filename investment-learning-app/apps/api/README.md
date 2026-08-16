@@ -27,11 +27,13 @@ app/
 │  └─ security.py       # Argon2id 해싱, JWT 발급·검증
 ├─ api/v1/             # 버전별 라우터 (auth, learning, instruments, portfolios, journals, ai)
 ├─ domain/
-│  ├─ *.py              # SQLAlchemy 도메인 모델 (user, market, portfolio, journal, policy)
+│  ├─ *.py              # SQLAlchemy 도메인 모델 (user, market, portfolio, journal, policy, learning, ai)
 │  └─ services/
 │     ├─ execution.py     # 모의 체결 엔진 (6.7) — build_quote, execute_order
 │     ├─ market_data.py   # 시장 데이터 provider 추상화·검증·upsert (6.4)
-│     └─ gamification.py  # XP 산정 규칙 (6.3) — 일일 상한, 이벤트당 1회 지급
+│     ├─ gamification.py  # XP 산정 규칙 (6.3) — 일일 상한, 이벤트당 1회 지급
+│     ├─ coaching.py      # 과정 점수(7.3)·행동편향 탐지(7.4)
+│     └─ ai_coach.py      # AI 코치 파이프라인 (7.5-7.7) — Claude API + 규칙기반 폴백
 ├─ scripts/
 │  └─ ingest_market_data.py  # 수동 시세 수집 CLI (라이브 미검증, README 참고)
 └─ workers/            # (미사용) 비동기 작업 placeholder — 실제 체결은 아직 API 요청 안에서 동기 실행
@@ -65,9 +67,20 @@ alembic/                # DB 마이그레이션
   **아직 없는 것**: 콘텐츠 게시 승인 워크플로(초안→검수→승인, 11.1)는 status 필드
   수준만 있고, 7일/28일 챌린지·배지·스트릭 보상 UI는 구현하지 않았다(스트릭 일수
   자체는 `/me/learning-summary`에서 XP 지급일 기준으로 계산해 제공).
-- 나머지 `api/v1/*` 라우터(일지, AI)는 명세서(`docs/product-spec.md`)
-  9.2 엔드포인트 목록에 맞춘 스텁이다. 각 파일 상단 docstring에 해당 Phase와 명세서
-  절 번호를 표시했다.
+- **journals** (`/v1/journals/*`, `/v1/me/bias-report`) — 구현 완료: 거래 전/후
+  일지, 수정 시 원문을 `journal_versions`로 보존, 규칙 기반 과정 점수(7.3, 6개 항목
+  가중합), 행동편향 탐지 3종(확증편향·처분효과·집중위험, 7.4 — 항상 "관찰된 거래
+  패턴"으로 표현하고 진단으로 표현하지 않음). 나머지 4개 편향 유형(추격매수·손실
+  회피·물타기 집착·과잉매매)은 미구현.
+- **ai** (`/v1/ai/*`, `/v1/journals/{id}/coaching`) — 구현 완료: 의도분류(정책
+  필터)→검색(강의 콘텐츠 키워드 매칭)→정량 규칙 엔진(과정 점수·시세·현금잔고를
+  결정론적으로 계산해 LLM에 문맥으로 전달)→LLM 설명→출력 정책 검사(직접 매매지시·
+  수익보장 패턴 차단)→출처·기준시각 표시 파이프라인. **중요**: 이 개발 세션에는
+  `ANTHROPIC_API_KEY`가 설정되어 있지 않아 실제 LLM 호출 경로를 라이브로 검증하지
+  못했다 — `ANTHROPIC_API_KEY`가 없거나 API 호출이 실패하면 규칙 기반 폴백으로
+  graceful degradation하며(7.7 요구사항), 이 폴백 경로는 테스트로 검증했다. 응답에
+  `degraded: true`가 표시되면 폴백 경로다. 시스템 프롬프트는
+  `content/prompts/v1-investment-coach.md`에 버전 관리한다(7.7).
 
 ## 테스트
 

@@ -301,6 +301,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # 시드 이후 실제 사용으로 생성됐을 수 있는 자식 레코드(quiz_attempts, lesson_progress)를
+    # 먼저 지워야 FK 위반 없이 downgrade할 수 있다.
+    op.execute(
+        "DELETE FROM quiz_attempts WHERE quiz_id IN (SELECT id FROM quizzes WHERE lesson_id IN "
+        "(SELECT id FROM lessons WHERE module_id IN (SELECT id FROM modules WHERE course_id IN "
+        "(SELECT id FROM courses WHERE title = '투자 시작하기'))))"
+    )
+    op.execute(
+        "DELETE FROM lesson_progress WHERE lesson_id IN (SELECT id FROM lessons WHERE module_id IN "
+        "(SELECT id FROM modules WHERE course_id IN (SELECT id FROM courses WHERE title = '투자 시작하기')))"
+    )
     op.execute(
         "DELETE FROM choices WHERE question_id IN (SELECT id FROM questions WHERE quiz_id IN "
         "(SELECT id FROM quizzes WHERE lesson_id IN (SELECT id FROM lessons WHERE module_id IN "
