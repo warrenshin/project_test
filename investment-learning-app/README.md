@@ -84,15 +84,17 @@ cd apps/api
 cp .env.example .env
 docker compose -f ../../infra/docker/docker-compose.yml up -d   # Postgres, Redis
 pip install -r requirements.txt
+alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
 ## 현재 진행 상태
 
-- [x] 저장소 골격 구성 (Phase 1 시작)
+- [x] 저장소 골격 구성
 - [x] 제품 명세 문서화
-- [ ] 초기 아키텍처 결정 확정 (`docs/adr/0001-initial-decisions.md` 참고, 사용자 확인 대기)
-- [ ] 인증·DB 마이그레이션·CI/CD
-- [ ] 학습 엔진 MVP
-- [ ] 모의투자 엔진 MVP
-- [ ] 투자일지·AI 코칭 MVP
+- [x] 초기 아키텍처 결정 확정 (`docs/adr/0001-initial-decisions.md`: 한국+미국 동시 지원,
+      무료 시세 API로 시작, AI 코치는 Anthropic Claude API. 무료/유료 경계 등 일부는 대기)
+- [x] Phase 1: 인증(회원가입·로그인·refresh 회전)·DB 마이그레이션·CI
+- [ ] 학습 엔진 MVP (Phase 2)
+- [ ] 모의투자 엔진 MVP (Phase 3, 한국·미국 이중 시장 지원)
+- [ ] 투자일지·AI 코칭 MVP (Phase 4)

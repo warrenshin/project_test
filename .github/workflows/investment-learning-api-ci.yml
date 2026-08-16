@@ -16,6 +16,22 @@ defaults:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: investment_learning
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d investment_learning"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/investment_learning
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,5 +43,7 @@ jobs:
           pip install pytest httpx
       - name: Import check
         run: python -c "from app.main import app; print(len(app.routes), 'routes registered')"
+      - name: Run DB migrations
+        run: python -m alembic upgrade head
       - name: Run tests
         run: pytest -q
