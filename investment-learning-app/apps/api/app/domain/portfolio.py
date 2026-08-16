@@ -65,6 +65,7 @@ class Fill(Base, UUIDPrimaryKeyMixin):
     commission: Mapped[Numeric] = mapped_column(Numeric(24, 8), nullable=False, default=0)
     tax: Mapped[Numeric] = mapped_column(Numeric(24, 8), nullable=False, default=0)
     slippage: Mapped[Numeric] = mapped_column(Numeric(24, 8), nullable=False, default=0)
+    realized_pnl: Mapped[Numeric | None] = mapped_column(Numeric(24, 8), nullable=True)
     market_data_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     filled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

@@ -95,6 +95,8 @@ uvicorn app.main:app --reload
 - [x] 초기 아키텍처 결정 확정 (`docs/adr/0001-initial-decisions.md`: 한국+미국 동시 지원,
       무료 시세 API로 시작, AI 코치는 Anthropic Claude API. 무료/유료 경계 등 일부는 대기)
 - [x] Phase 1: 인증(회원가입·로그인·refresh 회전)·DB 마이그레이션·CI
+- [x] Phase 3 핵심: 모의투자 원장·주문·체결 (한국·미국 이중 시장, KR/US 수수료·세금
+      정책, 8단계 주문 검증, idempotency, 포지션·성과 조회) — 장 운영시간 검증, 기업행사,
+      비동기 재평가 워커는 후속 작업으로 남음 (`apps/api/README.md` 참고)
 - [ ] 학습 엔진 MVP (Phase 2)
-- [ ] 모의투자 엔진 MVP (Phase 3, 한국·미국 이중 시장 지원)
 - [ ] 투자일지·AI 코칭 MVP (Phase 4)

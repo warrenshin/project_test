@@ -4,6 +4,7 @@ JWT access/refresh 토큰, refresh-token 회전, 다중 기기 세션(원격 로
 약관 동의 감사로그, 만 14세 미만 가입 제한을 구현한다.
 """
 
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,6 +18,7 @@ from app.api.v1.auth_schemas import (
     SignupRequest,
     TokenResponse,
 )
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.security import (
     create_access_token,
@@ -26,9 +28,36 @@ from app.core.security import (
     hash_token,
     verify_password,
 )
+from app.domain.constants import ACCOUNT_CASH, ENTRY_INITIAL_DEPOSIT
+from app.domain.portfolio import LedgerEntry, Portfolio
 from app.domain.user import Consent, Profile, Session as UserSession, User
 
 router = APIRouter()
+settings = get_settings()
+
+
+def _create_portfolio_with_initial_cash(db: DbSession, user: User) -> Portfolio:
+    """가입 시 모의투자 포트폴리오와 최초 가상현금을 원장에 기록한다 (6.5, 8.3).
+
+    잔고는 별도 필드가 아니라 ledger_entries에서 계산하므로, 최초 지급도 이벤트로
+    남긴다.
+    """
+    portfolio = Portfolio(user_id=user.id, base_currency=settings.default_base_currency)
+    db.add(portfolio)
+    db.flush()
+
+    db.add(
+        LedgerEntry(
+            portfolio_id=portfolio.id,
+            event_id=uuid.uuid4(),
+            account_code=ACCOUNT_CASH,
+            currency=settings.default_base_currency,
+            amount=settings.default_virtual_cash_krw,
+            entry_type=ENTRY_INITIAL_DEPOSIT,
+            occurred_at=datetime.now(timezone.utc),
+        )
+    )
+    return portfolio
 
 
 def _age_years(birth_date: date, as_of: date) -> int:
@@ -65,7 +94,7 @@ def signup(payload: SignupRequest, db: DbSession = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=409, detail="이미 가입된 이메일입니다.")
 
-    db.add(Profile(user_id=user.id, birth_date=payload.birth_date))
+    db.add(Profile(user_id=user.id, birth_date=payload.birth_date, base_currency=settings.default_base_currency))
     agreed_at = datetime.now(timezone.utc)
     for consent in payload.consents:
         db.add(
@@ -77,6 +106,7 @@ def signup(payload: SignupRequest, db: DbSession = Depends(get_db)):
                 agreed_at=agreed_at,
             )
         )
+    _create_portfolio_with_initial_cash(db, user)
     db.commit()
 
     return _issue_tokens(db, user)

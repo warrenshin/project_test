@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # 시장 데이터 최신성 기준 (초). 이 시간을 넘으면 주문을 거부하거나 지연 모드로 처리한다.
     market_data_staleness_threshold_seconds: int = 900
 
+    # 주문 후 단일 종목 비중이 이 값(%)을 초과하면 집중도 경고를 반환한다 (차단하지 않음).
+    concentration_warning_threshold_pct: int = 30
+
 
 @lru_cache
 def get_settings() -> Settings:
