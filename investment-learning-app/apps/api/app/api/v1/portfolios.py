@@ -31,6 +31,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.deps import get_current_user
 from app.domain.constants import ORDER_ACCEPTED, ORDER_CANCELLED, ORDER_TERMINAL_STATUSES
+from app.domain.journal import JournalEntry
 from app.domain.market import Instrument
 from app.domain.portfolio import Fill, LedgerEntry, Order, Portfolio, Position
 from app.domain.services import execution
@@ -346,6 +347,17 @@ def create_order(
     except execution.InsufficientHoldingsError as exc:
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc))
+
+    if payload.pre_trade_journal_id is not None:
+        # 일지 -> 주문 역참조를 채워야 처분효과 등 편향 탐지(coaching.detect_biases)가
+        # 이 거래를 찾을 수 있다. 본인 소유 일지가 아니면 조용히 건너뛴다.
+        journal = (
+            db.query(JournalEntry)
+            .filter(JournalEntry.id == payload.pre_trade_journal_id, JournalEntry.user_id == current_user.id)
+            .first()
+        )
+        if journal is not None:
+            journal.order_id = order.id
 
     db.commit()
     db.refresh(order)

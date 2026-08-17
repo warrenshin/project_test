@@ -66,6 +66,25 @@ class LessonDetailResponse(BaseModel):
     progress: LessonProgressResponse | None
 
 
+class QuizChoiceResponse(BaseModel):
+    id: UUID
+    label: str
+
+
+class QuizQuestionResponse(BaseModel):
+    id: UUID
+    prompt: str
+    question_type: str
+    choices: list[QuizChoiceResponse]
+
+
+class QuizDetailResponse(BaseModel):
+    id: UUID
+    title: str
+    pass_score_pct: Decimal
+    questions: list[QuizQuestionResponse]
+
+
 class LessonProgressUpdateRequest(BaseModel):
     status: Literal["IN_PROGRESS", "COMPLETED"]
     last_content_block_id: UUID | None = None

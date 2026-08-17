@@ -22,8 +22,9 @@
 ```text
 investment-learning-app/
 ├─ apps/
-│  ├─ mobile/            # Flutter 앱
-│  ├─ admin-web/         # Next.js 관리자 웹
+│  ├─ mobile/            # Flutter 앱 (계획, 미구현)
+│  ├─ admin-web/         # Next.js 관리자 웹 (계획, 미구현)
+│  ├─ web/                # Next.js 사용자용 웹 (실제 구현됨 — mobile 대신 웹으로 MVP 진행)
 │  └─ api/                # FastAPI 백엔드 (모듈형 모놀리스)
 ├─ services/
 │  ├─ market-data-worker/ # 시장 데이터 수집
@@ -79,6 +80,8 @@ investment-learning-app/
 
 ## 로컬 개발 시작
 
+백엔드:
+
 ```bash
 cd apps/api
 cp .env.example .env
@@ -87,6 +90,17 @@ pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
+
+프런트엔드(별도 터미널, 백엔드가 떠 있어야 함):
+
+```bash
+cd apps/web
+npm install
+npm run dev   # http://localhost:3000
+```
+
+두 서버를 함께 실행하는 방법, 데모 시세 새로고침(오래된 시세로 주문이 막힐 때),
+Playwright E2E 테스트 실행 방법은 `apps/web/README.md`를 참고한다.
 
 ## 현재 진행 상태
 
@@ -109,3 +123,13 @@ uvicorn app.main:app --reload
       표시). **단, `ANTHROPIC_API_KEY`가 이 개발 세션에 설정되어 있지 않아 실제 LLM
       호출은 검증하지 못함** — 지금은 규칙 기반 graceful degradation 경로만 실제로
       동작을 확인했다 (`apps/api/README.md` 참고, 운영 투입 전 실제 키로 재검증 필요)
+- [x] 핵심 End-to-End 사용자 흐름: `apps/web`(Next.js) 프런트엔드로 회원가입→1강
+      학습→퀴즈 제출/XP→종목 검색→거래 전 일지→가상 시장가 매수→포트폴리오 반영→
+      거래 후 복기→규칙 기반 AI 코칭까지 실제 API에 연결. 새로고침·재로그인 후 데이터
+      유지, 로딩·빈 상태·오류·시세 지연 표시, 모든 주문 화면의 가상자금 명시를
+      Playwright E2E 테스트(`apps/web/e2e/full-flow.spec.ts`)로 검증했다. 이 흐름을
+      완성하며 백엔드에 읽기 전용 보완 엔드포인트 3개(`GET /v1/quizzes/{id}`,
+      `GET /v1/journals/{id}`, `GET /v1/me/journals`)와 CORS 설정, 주문↔일지
+      `order_id` 자동 연결(처분효과 탐지에 필요)을 추가했다(`apps/api/README.md`
+      참고). 범위 밖: 실제 투자·증권계좌 연결, 6~30강, 나머지 4개 행동편향 유형,
+      실시간 시세 공급자 교체, 실제 Claude API 연결, 디자인 전면 개편.

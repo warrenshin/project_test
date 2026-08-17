@@ -8,6 +8,72 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _idem_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())}
+
+
+def test_list_and_get_my_journals(db):
+    token, portfolio_id = signup_user("journallister")
+    instrument = seed_instrument_with_bar(db, "035420", "KRX", "KRW", close=200_000)
+
+    create_res = client.post(
+        "/v1/journals/pre-trade",
+        json={
+            "portfolio_id": portfolio_id,
+            "instrument_id": str(instrument.id),
+            "thesis": "검색 점유율 확대",
+            "counter_evidence": ["광고 경쟁 심화"],
+        },
+        headers=_auth(token),
+    )
+    assert create_res.status_code == 201, create_res.text
+    journal_id = create_res.json()["id"]
+
+    list_res = client.get("/v1/me/journals", headers=_auth(token))
+    assert list_res.status_code == 200
+    ids = [j["id"] for j in list_res.json()]
+    assert journal_id in ids
+
+    get_res = client.get(f"/v1/journals/{journal_id}", headers=_auth(token))
+    assert get_res.status_code == 200
+    assert get_res.json()["thesis"] == "검색 점유율 확대"
+
+
+def test_order_backfills_journal_order_id_for_bias_detection(db):
+    token, portfolio_id = signup_user("backfilluser")
+    instrument = seed_instrument_with_bar(db, "003550", "KRX", "KRW", close=90_000)
+
+    journal_res = client.post(
+        "/v1/journals/pre-trade",
+        json={
+            "portfolio_id": portfolio_id,
+            "instrument_id": str(instrument.id),
+            "thesis": "지주사 저평가",
+            "counter_evidence": ["지배구조 불확실성"],
+        },
+        headers=_auth(token),
+    )
+    journal_id = journal_res.json()["id"]
+    assert journal_res.json()["order_id"] is None
+
+    order_res = client.post(
+        f"/v1/portfolios/{portfolio_id}/orders",
+        json={
+            "instrument_id": str(instrument.id),
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": "1",
+            "pre_trade_journal_id": journal_id,
+        },
+        headers=_idem_headers(token),
+    )
+    assert order_res.status_code == 201, order_res.text
+    order_id = order_res.json()["id"]
+
+    journal_after = client.get(f"/v1/journals/{journal_id}", headers=_auth(token))
+    assert journal_after.json()["order_id"] == order_id
+
+
 def test_pre_trade_journal_scores_low_without_counter_evidence(db):
     token, portfolio_id = signup_user("journaler1")
     instrument = seed_instrument_with_bar(db, "032830", "KRX", "KRW", close=60_000)
@@ -158,3 +224,71 @@ def test_ai_coach_policy_filter_blocks_direct_instruction_text():
 
     assert check_policy_violation("지금 사세요, 확실히 오를 것입니다") is not None
     assert check_policy_violation("ETF는 여러 종목에 분산투자하는 상품입니다") is None
+
+
+# --- 객체 단위 권한(IDOR) 회귀 테스트 ---
+# 병합 전 감사에서 확인된 항목: 다른 사용자의 UUID를 넣어 일지를 조회·연결할 수 없어야 한다.
+
+
+def test_cannot_get_another_users_journal_by_id(db):
+    token_a, portfolio_a = signup_user("idorvictim")
+    instrument = seed_instrument_with_bar(db, "017670", "KRX", "KRW", close=45_000)
+    victim_journal = client.post(
+        "/v1/journals/pre-trade",
+        json={"portfolio_id": portfolio_a, "instrument_id": str(instrument.id), "thesis": "피해자 일지"},
+        headers=_auth(token_a),
+    ).json()
+
+    token_b, _ = signup_user("idorattacker")
+    res = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_b))
+    assert res.status_code == 404
+
+
+def test_me_journals_never_includes_another_users_journal(db):
+    token_a, portfolio_a = signup_user("idorvictim2")
+    instrument = seed_instrument_with_bar(db, "090430", "KRX", "KRW", close=150_000)
+    victim_journal = client.post(
+        "/v1/journals/pre-trade",
+        json={"portfolio_id": portfolio_a, "instrument_id": str(instrument.id), "thesis": "피해자 일지2"},
+        headers=_auth(token_a),
+    ).json()
+
+    token_b, _ = signup_user("idorattacker2")
+    res = client.get("/v1/me/journals", headers=_auth(token_b))
+    assert res.status_code == 200
+    ids = [j["id"] for j in res.json()]
+    assert victim_journal["id"] not in ids
+
+
+def test_cannot_backfill_another_users_journal_via_order(db):
+    """공격자가 자신의 주문 생성 요청에 피해자의 journal id를 pre_trade_journal_id로
+    넣어도, 피해자 일지의 order_id가 채워지거나 공격자 소유로 넘어가지 않아야 한다."""
+    token_victim, portfolio_victim = signup_user("idorvictim3")
+    instrument = seed_instrument_with_bar(db, "086790", "KRX", "KRW", close=55_000)
+    victim_journal = client.post(
+        "/v1/journals/pre-trade",
+        json={"portfolio_id": portfolio_victim, "instrument_id": str(instrument.id), "thesis": "피해자 일지3"},
+        headers=_auth(token_victim),
+    ).json()
+    assert victim_journal["order_id"] is None
+
+    token_attacker, portfolio_attacker = signup_user("idorattacker3")
+    order_res = client.post(
+        f"/v1/portfolios/{portfolio_attacker}/orders",
+        json={
+            "instrument_id": str(instrument.id),
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": "1",
+            "pre_trade_journal_id": victim_journal["id"],
+        },
+        headers=_idem_headers(token_attacker),
+    )
+    assert order_res.status_code == 201, order_res.text
+
+    victim_journal_after = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_victim))
+    assert victim_journal_after.json()["order_id"] is None
+
+    # 공격자 본인은 피해자 일지를 여전히 볼 수 없다
+    attacker_view = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_attacker))
+    assert attacker_view.status_code == 404

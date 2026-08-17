@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     ai_coach_complex_model: str = "claude-sonnet-5"
     ai_coach_prompt_version: str = "v1"
 
+    # apps/web(Next.js) 로컬 개발 서버 CORS 허용 origin (쉼표로 구분)
+    cors_allowed_origins_raw: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_allowed_origins_raw.split(",") if o.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

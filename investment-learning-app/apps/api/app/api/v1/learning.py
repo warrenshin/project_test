@@ -24,6 +24,9 @@ from app.api.v1.learning_schemas import (
     QuestionResult,
     QuizAttemptRequest,
     QuizAttemptResponse,
+    QuizChoiceResponse,
+    QuizDetailResponse,
+    QuizQuestionResponse,
     QuizSummary,
 )
 from app.core.db import get_db
@@ -197,6 +200,34 @@ def update_lesson_progress(
 
     db.commit()
     return LessonProgressUpdateResponse(status=progress.status, completed_at=progress.completed_at, xp_awarded=xp_awarded)
+
+
+@router.get("/quizzes/{quiz_id}", response_model=QuizDetailResponse)
+def get_quiz(quiz_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """퀴즈 문항 조회. 명세서 9.2에 명시적 엔드포인트는 없지만, 클라이언트가 채점 전 문항을
+    렌더링하려면 필요하다. 정답 여부(Choice.is_correct)는 응답에 포함하지 않는다."""
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
+    if quiz is None:
+        raise HTTPException(status_code=404, detail="퀴즈를 찾을 수 없습니다.")
+
+    questions = db.query(Question).filter(Question.quiz_id == quiz.id).order_by(Question.order_index).all()
+    question_responses = []
+    for question in questions:
+        choices = (
+            db.query(Choice).filter(Choice.question_id == question.id).order_by(Choice.order_index).all()
+        )
+        question_responses.append(
+            QuizQuestionResponse(
+                id=question.id,
+                prompt=question.prompt,
+                question_type=question.question_type,
+                choices=[QuizChoiceResponse(id=c.id, label=c.label) for c in choices],
+            )
+        )
+
+    return QuizDetailResponse(
+        id=quiz.id, title=quiz.title, pass_score_pct=quiz.pass_score_pct, questions=question_responses
+    )
 
 
 @router.post("/quizzes/{quiz_id}/attempts", response_model=QuizAttemptResponse)
