@@ -24,7 +24,7 @@ from app.core.db import get_db
 from app.core.deps import get_current_user
 from app.domain.journal import JournalEntry, JournalVersion
 from app.domain.market import Instrument
-from app.domain.portfolio import Portfolio
+from app.domain.portfolio import Order, Portfolio
 from app.domain.services import ai_coach, coaching, execution
 from app.domain.user import User
 
@@ -60,6 +60,13 @@ def create_pre_trade_journal(
     instrument = db.query(Instrument).filter(Instrument.id == payload.instrument_id).first()
     if instrument is None:
         raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다.")
+
+    if payload.order_id is not None:
+        # 다른 사용자 소유 주문을 자신의 일지에 연결하지 못하도록 쓰기 시점에 검증한다.
+        # 존재하지 않는 경우와 동일하게 404로 응답해 소유 여부를 노출하지 않는다.
+        order = db.query(Order).filter(Order.id == payload.order_id, Order.portfolio_id == portfolio.id).first()
+        if order is None:
+            raise HTTPException(status_code=404, detail="주문을 찾을 수 없습니다.")
 
     bar = execution.get_latest_bar(db, instrument.id)
     market_snapshot = None
