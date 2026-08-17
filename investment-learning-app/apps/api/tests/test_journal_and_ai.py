@@ -262,7 +262,9 @@ def test_me_journals_never_includes_another_users_journal(db):
 
 def test_cannot_backfill_another_users_journal_via_order(db):
     """공격자가 자신의 주문 생성 요청에 피해자의 journal id를 pre_trade_journal_id로
-    넣어도, 피해자 일지의 order_id가 채워지거나 공격자 소유로 넘어가지 않아야 한다."""
+    넣으면, 서버는 쓰기 시점에 소유권을 검증해 주문 자체를 생성하지 않는다(404).
+    (2026-08 감사 후속 조치: 이전에는 조용히 건너뛰고 주문만 성사시켰으나,
+    쓰기 시점 검증 도입 후 요청 전체가 거절되도록 강화했다.)"""
     token_victim, portfolio_victim = signup_user("idorvictim3")
     instrument = seed_instrument_with_bar(db, "086790", "KRX", "KRW", close=55_000)
     victim_journal = client.post(
@@ -284,7 +286,7 @@ def test_cannot_backfill_another_users_journal_via_order(db):
         },
         headers=_idem_headers(token_attacker),
     )
-    assert order_res.status_code == 201, order_res.text
+    assert order_res.status_code == 404, order_res.text
 
     victim_journal_after = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_victim))
     assert victim_journal_after.json()["order_id"] is None
@@ -292,3 +294,195 @@ def test_cannot_backfill_another_users_journal_via_order(db):
     # 공격자 본인은 피해자 일지를 여전히 볼 수 없다
     attacker_view = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_attacker))
     assert attacker_view.status_code == 404
+
+
+# --- 쓰기 시점 소유권 검증 (2026-08 감사 후속 조치) ---
+# journals.py::create_pre_trade_journal의 order_id와 portfolios.py::create_order의
+# pre_trade_journal_id는 이제 저장 전에 소유권을 서버에서 검증한다. 둘 다 "존재하지
+# 않음"과 "타인 소유"를 구분하지 않고 404로 응답해(anti-enumeration) 이 파일의 다른
+# 소유권 검증들(_get_owned_journal, _get_owned_portfolio)과 정책을 통일한다.
+
+
+def test_can_create_journal_linked_to_own_order(db):
+    token, portfolio_id = signup_user("ownerlinker")
+    instrument = seed_instrument_with_bar(db, "011790", "KRX", "KRW", close=70_000)
+
+    order_res = client.post(
+        f"/v1/portfolios/{portfolio_id}/orders",
+        json={"instrument_id": str(instrument.id), "side": "BUY", "order_type": "MARKET", "quantity": "1"},
+        headers=_idem_headers(token),
+    )
+    assert order_res.status_code == 201, order_res.text
+    order_id = order_res.json()["id"]
+
+    journal_res = client.post(
+        "/v1/journals/pre-trade",
+        json={
+            "portfolio_id": portfolio_id,
+            "instrument_id": str(instrument.id),
+            "order_id": order_id,
+            "thesis": "이미 체결된 내 주문에 사후 연결",
+        },
+        headers=_auth(token),
+    )
+    assert journal_res.status_code == 201, journal_res.text
+    assert journal_res.json()["order_id"] == order_id
+
+
+def test_cannot_create_journal_linked_to_other_users_order(db):
+    token_victim, portfolio_victim = signup_user("orderowner")
+    instrument = seed_instrument_with_bar(db, "058470", "KRX", "KRW", close=30_000)
+    victim_order = client.post(
+        f"/v1/portfolios/{portfolio_victim}/orders",
+        json={"instrument_id": str(instrument.id), "side": "BUY", "order_type": "MARKET", "quantity": "1"},
+        headers=_idem_headers(token_victim),
+    ).json()
+
+    token_attacker, portfolio_attacker = signup_user("orderattacker")
+    res = client.post(
+        "/v1/journals/pre-trade",
+        json={
+            "portfolio_id": portfolio_attacker,
+            "instrument_id": str(instrument.id),
+            "order_id": victim_order["id"],
+            "thesis": "타인 주문에 무단 연결 시도",
+        },
+        headers=_auth(token_attacker),
+    )
+    assert res.status_code == 404, res.text
+
+    # 거절된 요청은 일지 자체를 남기지 않는다
+    attacker_journals = client.get("/v1/me/journals", headers=_auth(token_attacker)).json()
+    assert all(j["thesis"] != "타인 주문에 무단 연결 시도" for j in attacker_journals)
+
+
+def test_create_journal_with_nonexistent_order_id_returns_404(db):
+    token, portfolio_id = signup_user("ghostorderjournal")
+    instrument = seed_instrument_with_bar(db, "064350", "KRX", "KRW", close=40_000)
+
+    res = client.post(
+        "/v1/journals/pre-trade",
+        json={
+            "portfolio_id": portfolio_id,
+            "instrument_id": str(instrument.id),
+            "order_id": str(uuid.uuid4()),
+            "thesis": "존재하지 않는 주문 참조",
+        },
+        headers=_auth(token),
+    )
+    assert res.status_code == 404, res.text
+
+    journals = client.get("/v1/me/journals", headers=_auth(token)).json()
+    assert all(j["thesis"] != "존재하지 않는 주문 참조" for j in journals)
+
+
+def test_create_order_with_nonexistent_pre_trade_journal_id_returns_404(db):
+    from app.domain.portfolio import LedgerEntry, Order, Position
+    from app.domain.services import execution
+
+    token, portfolio_id = signup_user("ghostjournalorder")
+    instrument = seed_instrument_with_bar(db, "052690", "KRX", "KRW", close=20_000)
+
+    cash_before = execution.get_cash_balance(db, uuid.UUID(portfolio_id), "KRW")
+    orders_before = db.query(Order).filter(Order.portfolio_id == uuid.UUID(portfolio_id)).count()
+    ledger_before = db.query(LedgerEntry).filter(LedgerEntry.portfolio_id == uuid.UUID(portfolio_id)).count()
+    positions_before = db.query(Position).filter(Position.portfolio_id == uuid.UUID(portfolio_id)).count()
+
+    res = client.post(
+        f"/v1/portfolios/{portfolio_id}/orders",
+        json={
+            "instrument_id": str(instrument.id),
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": "1",
+            "pre_trade_journal_id": str(uuid.uuid4()),
+        },
+        headers=_idem_headers(token),
+    )
+    assert res.status_code == 404, res.text
+
+    # 거절된 요청은 Order/ledger/position/cash에 어떤 부분 변경도 남기지 않는다
+    db.expire_all()
+    assert execution.get_cash_balance(db, uuid.UUID(portfolio_id), "KRW") == cash_before
+    assert db.query(Order).filter(Order.portfolio_id == uuid.UUID(portfolio_id)).count() == orders_before
+    assert (
+        db.query(LedgerEntry).filter(LedgerEntry.portfolio_id == uuid.UUID(portfolio_id)).count() == ledger_before
+    )
+    assert db.query(Position).filter(Position.portfolio_id == uuid.UUID(portfolio_id)).count() == positions_before
+
+
+def test_rejected_order_leaves_no_partial_state_for_other_users_journal(db):
+    """타인 소유 일지를 노려 주문을 넣었다가 거절될 때도 부분 변경이 남지 않아야 한다."""
+    from app.domain.portfolio import LedgerEntry, Order, Position
+    from app.domain.services import execution
+
+    token_victim, portfolio_victim = signup_user("statevictim")
+    instrument = seed_instrument_with_bar(db, "047810", "KRX", "KRW", close=25_000)
+    victim_journal = client.post(
+        "/v1/journals/pre-trade",
+        json={"portfolio_id": portfolio_victim, "instrument_id": str(instrument.id), "thesis": "상태 보존 확인용"},
+        headers=_auth(token_victim),
+    ).json()
+
+    token_attacker, portfolio_attacker = signup_user("stateattacker")
+    cash_before = execution.get_cash_balance(db, uuid.UUID(portfolio_attacker), "KRW")
+    orders_before = db.query(Order).filter(Order.portfolio_id == uuid.UUID(portfolio_attacker)).count()
+    ledger_before = (
+        db.query(LedgerEntry).filter(LedgerEntry.portfolio_id == uuid.UUID(portfolio_attacker)).count()
+    )
+    positions_before = db.query(Position).filter(Position.portfolio_id == uuid.UUID(portfolio_attacker)).count()
+
+    res = client.post(
+        f"/v1/portfolios/{portfolio_attacker}/orders",
+        json={
+            "instrument_id": str(instrument.id),
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": "1",
+            "pre_trade_journal_id": victim_journal["id"],
+        },
+        headers=_idem_headers(token_attacker),
+    )
+    assert res.status_code == 404, res.text
+
+    db.expire_all()
+    assert execution.get_cash_balance(db, uuid.UUID(portfolio_attacker), "KRW") == cash_before
+    assert db.query(Order).filter(Order.portfolio_id == uuid.UUID(portfolio_attacker)).count() == orders_before
+    assert (
+        db.query(LedgerEntry).filter(LedgerEntry.portfolio_id == uuid.UUID(portfolio_attacker)).count()
+        == ledger_before
+    )
+    assert (
+        db.query(Position).filter(Position.portfolio_id == uuid.UUID(portfolio_attacker)).count()
+        == positions_before
+    )
+
+
+def test_own_order_journal_backfill_still_works_after_ownership_validation(db):
+    """정상 흐름(자신의 일지 -> 자신의 주문) 회귀 확인: 쓰기 시점 검증 도입 후에도
+    기존 order->journal backfill이 그대로 동작해야 한다."""
+    token, portfolio_id = signup_user("backfillregression")
+    instrument = seed_instrument_with_bar(db, "298050", "KRX", "KRW", close=35_000)
+
+    journal = client.post(
+        "/v1/journals/pre-trade",
+        json={"portfolio_id": portfolio_id, "instrument_id": str(instrument.id), "thesis": "회귀 확인용 일지"},
+        headers=_auth(token),
+    ).json()
+    assert journal["order_id"] is None
+
+    order_res = client.post(
+        f"/v1/portfolios/{portfolio_id}/orders",
+        json={
+            "instrument_id": str(instrument.id),
+            "side": "BUY",
+            "order_type": "MARKET",
+            "quantity": "1",
+            "pre_trade_journal_id": journal["id"],
+        },
+        headers=_idem_headers(token),
+    )
+    assert order_res.status_code == 201, order_res.text
+
+    journal_after = client.get(f"/v1/journals/{journal['id']}", headers=_auth(token))
+    assert journal_after.json()["order_id"] == order_res.json()["id"]

@@ -282,6 +282,19 @@ def create_order(
     # 1. 사용자·포트폴리오 권한
     portfolio = _get_owned_portfolio(db, portfolio_id, current_user)
 
+    # 다른 사용자 소유 일지를 자신의 주문에 연결하지 못하도록 쓰기 시점에 검증한다.
+    # 존재하지 않는 경우와 동일하게 404로 응답해 소유 여부를 노출하지 않으며,
+    # 검증에 실패하면 주문 자체를 생성하지 않는다.
+    pre_trade_journal: JournalEntry | None = None
+    if payload.pre_trade_journal_id is not None:
+        pre_trade_journal = (
+            db.query(JournalEntry)
+            .filter(JournalEntry.id == payload.pre_trade_journal_id, JournalEntry.user_id == current_user.id)
+            .first()
+        )
+        if pre_trade_journal is None:
+            raise HTTPException(status_code=404, detail="투자일지를 찾을 수 없습니다.")
+
     # 5. 중복 요청: 같은 idempotency key면 새로 만들지 않고 기존 결과를 반환한다
     existing = (
         db.query(Order)
@@ -348,16 +361,10 @@ def create_order(
         db.rollback()
         raise HTTPException(status_code=422, detail=str(exc))
 
-    if payload.pre_trade_journal_id is not None:
+    if pre_trade_journal is not None:
         # 일지 -> 주문 역참조를 채워야 처분효과 등 편향 탐지(coaching.detect_biases)가
-        # 이 거래를 찾을 수 있다. 본인 소유 일지가 아니면 조용히 건너뛴다.
-        journal = (
-            db.query(JournalEntry)
-            .filter(JournalEntry.id == payload.pre_trade_journal_id, JournalEntry.user_id == current_user.id)
-            .first()
-        )
-        if journal is not None:
-            journal.order_id = order.id
+        # 이 거래를 찾을 수 있다. 소유권은 함수 시작부에서 이미 검증했다.
+        pre_trade_journal.order_id = order.id
 
     db.commit()
     db.refresh(order)
