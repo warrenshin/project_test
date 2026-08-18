@@ -4,12 +4,12 @@ from decimal import Decimal
 from tests.conftest import client, seed_instrument_with_bar, signup_user
 
 
-def _auth(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}"}
+def _auth(cookies: dict) -> dict:
+    return cookies
 
 
-def _idem_headers(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}", "Idempotency-Key": str(uuid.uuid4())}
+def _idem_headers() -> dict:
+    return {"Idempotency-Key": str(uuid.uuid4())}
 
 
 def test_list_and_get_my_journals(db):
@@ -24,17 +24,17 @@ def test_list_and_get_my_journals(db):
             "thesis": "검색 점유율 확대",
             "counter_evidence": ["광고 경쟁 심화"],
         },
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     assert create_res.status_code == 201, create_res.text
     journal_id = create_res.json()["id"]
 
-    list_res = client.get("/v1/me/journals", headers=_auth(token))
+    list_res = client.get("/v1/me/journals", cookies=_auth(token))
     assert list_res.status_code == 200
     ids = [j["id"] for j in list_res.json()]
     assert journal_id in ids
 
-    get_res = client.get(f"/v1/journals/{journal_id}", headers=_auth(token))
+    get_res = client.get(f"/v1/journals/{journal_id}", cookies=_auth(token))
     assert get_res.status_code == 200
     assert get_res.json()["thesis"] == "검색 점유율 확대"
 
@@ -51,7 +51,7 @@ def test_order_backfills_journal_order_id_for_bias_detection(db):
             "thesis": "지주사 저평가",
             "counter_evidence": ["지배구조 불확실성"],
         },
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     journal_id = journal_res.json()["id"]
     assert journal_res.json()["order_id"] is None
@@ -65,12 +65,13 @@ def test_order_backfills_journal_order_id_for_bias_detection(db):
             "quantity": "1",
             "pre_trade_journal_id": journal_id,
         },
-        headers=_idem_headers(token),
+        cookies=token,
+        headers=_idem_headers(),
     )
     assert order_res.status_code == 201, order_res.text
     order_id = order_res.json()["id"]
 
-    journal_after = client.get(f"/v1/journals/{journal_id}", headers=_auth(token))
+    journal_after = client.get(f"/v1/journals/{journal_id}", cookies=_auth(token))
     assert journal_after.json()["order_id"] == order_id
 
 
@@ -86,7 +87,7 @@ def test_pre_trade_journal_scores_low_without_counter_evidence(db):
         "counter_evidence": [],
         "planned_weight_pct": "5",
     }
-    res = client.post("/v1/journals/pre-trade", json=payload, headers=_auth(token))
+    res = client.post("/v1/journals/pre-trade", json=payload, cookies=_auth(token))
     assert res.status_code == 201, res.text
     body = res.json()
     assert body["market_data_snapshot"]["close"] == "60000.00000000"
@@ -109,12 +110,12 @@ def test_journal_update_preserves_original_as_version(db):
             "thesis": "최초 논리",
             "counter_evidence": ["원자재 가격 상승 위험"],
         },
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     journal_id = create_res.json()["id"]
 
     update_res = client.patch(
-        f"/v1/journals/{journal_id}", json={"thesis": "수정된 논리"}, headers=_auth(token)
+        f"/v1/journals/{journal_id}", json={"thesis": "수정된 논리"}, cookies=_auth(token)
     )
     assert update_res.status_code == 200
     assert update_res.json()["thesis"] == "수정된 논리"
@@ -141,7 +142,7 @@ def test_post_trade_review_improves_process_score(db):
             "expected_holding_period": "1개월",
             "planned_weight_pct": "8",
         },
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     journal_id = create_res.json()["id"]
     score_before = Decimal(str(create_res.json()["process_score"]))
@@ -155,7 +156,7 @@ def test_post_trade_review_improves_process_score(db):
             "behavior_to_change": "성급한 매도",
             "emotion_tags": ["확신"],
         },
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     assert post_trade_res.status_code == 200
     score_after = Decimal(str(post_trade_res.json()["process_score"]))
@@ -166,7 +167,7 @@ def test_journal_coaching_endpoint_returns_degraded_fallback():
     token, portfolio_id = signup_user("journaler4")
 
     # journal 없이도 인증만 되면 존재하지 않는 journal 접근은 404
-    res = client.get(f"/v1/journals/{uuid.uuid4()}/coaching", headers=_auth(token))
+    res = client.get(f"/v1/journals/{uuid.uuid4()}/coaching", cookies=_auth(token))
     assert res.status_code == 404
 
 
@@ -183,10 +184,10 @@ def test_bias_report_flags_missing_counter_evidence(db):
                 "thesis": f"논리 {i}",
                 "counter_evidence": [],
             },
-            headers=_auth(token),
+            cookies=_auth(token),
         )
 
-    res = client.get("/v1/me/bias-report", headers=_auth(token))
+    res = client.get("/v1/me/bias-report", cookies=_auth(token))
     assert res.status_code == 200
     body = res.json()
     patterns = [o["pattern"] for o in body["observations"]]
@@ -196,14 +197,14 @@ def test_bias_report_flags_missing_counter_evidence(db):
 def test_ai_conversation_falls_back_gracefully_without_api_key():
     token, _ = signup_user("aiuser")
 
-    conv_res = client.post("/v1/ai/conversations", json={}, headers=_auth(token))
+    conv_res = client.post("/v1/ai/conversations", json={}, cookies=_auth(token))
     assert conv_res.status_code == 201
     conversation_id = conv_res.json()["id"]
 
     msg_res = client.post(
         f"/v1/ai/conversations/{conversation_id}/messages",
         json={"content": "ETF가 뭔가요?"},
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     assert msg_res.status_code == 201
     body = msg_res.json()
@@ -214,7 +215,7 @@ def test_ai_conversation_falls_back_gracefully_without_api_key():
     feedback_res = client.post(
         f"/v1/ai/messages/{body['id']}/feedback",
         json={"feedback": "HELPFUL"},
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     assert feedback_res.status_code == 204
 
@@ -236,11 +237,11 @@ def test_cannot_get_another_users_journal_by_id(db):
     victim_journal = client.post(
         "/v1/journals/pre-trade",
         json={"portfolio_id": portfolio_a, "instrument_id": str(instrument.id), "thesis": "피해자 일지"},
-        headers=_auth(token_a),
+        cookies=_auth(token_a),
     ).json()
 
     token_b, _ = signup_user("idorattacker")
-    res = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_b))
+    res = client.get(f"/v1/journals/{victim_journal['id']}", cookies=_auth(token_b))
     assert res.status_code == 404
 
 
@@ -250,11 +251,11 @@ def test_me_journals_never_includes_another_users_journal(db):
     victim_journal = client.post(
         "/v1/journals/pre-trade",
         json={"portfolio_id": portfolio_a, "instrument_id": str(instrument.id), "thesis": "피해자 일지2"},
-        headers=_auth(token_a),
+        cookies=_auth(token_a),
     ).json()
 
     token_b, _ = signup_user("idorattacker2")
-    res = client.get("/v1/me/journals", headers=_auth(token_b))
+    res = client.get("/v1/me/journals", cookies=_auth(token_b))
     assert res.status_code == 200
     ids = [j["id"] for j in res.json()]
     assert victim_journal["id"] not in ids
@@ -270,7 +271,7 @@ def test_cannot_backfill_another_users_journal_via_order(db):
     victim_journal = client.post(
         "/v1/journals/pre-trade",
         json={"portfolio_id": portfolio_victim, "instrument_id": str(instrument.id), "thesis": "피해자 일지3"},
-        headers=_auth(token_victim),
+        cookies=_auth(token_victim),
     ).json()
     assert victim_journal["order_id"] is None
 
@@ -284,15 +285,16 @@ def test_cannot_backfill_another_users_journal_via_order(db):
             "quantity": "1",
             "pre_trade_journal_id": victim_journal["id"],
         },
-        headers=_idem_headers(token_attacker),
+        cookies=token_attacker,
+        headers=_idem_headers(),
     )
     assert order_res.status_code == 404, order_res.text
 
-    victim_journal_after = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_victim))
+    victim_journal_after = client.get(f"/v1/journals/{victim_journal['id']}", cookies=_auth(token_victim))
     assert victim_journal_after.json()["order_id"] is None
 
     # 공격자 본인은 피해자 일지를 여전히 볼 수 없다
-    attacker_view = client.get(f"/v1/journals/{victim_journal['id']}", headers=_auth(token_attacker))
+    attacker_view = client.get(f"/v1/journals/{victim_journal['id']}", cookies=_auth(token_attacker))
     assert attacker_view.status_code == 404
 
 
@@ -310,7 +312,8 @@ def test_can_create_journal_linked_to_own_order(db):
     order_res = client.post(
         f"/v1/portfolios/{portfolio_id}/orders",
         json={"instrument_id": str(instrument.id), "side": "BUY", "order_type": "MARKET", "quantity": "1"},
-        headers=_idem_headers(token),
+        cookies=token,
+        headers=_idem_headers(),
     )
     assert order_res.status_code == 201, order_res.text
     order_id = order_res.json()["id"]
@@ -323,7 +326,7 @@ def test_can_create_journal_linked_to_own_order(db):
             "order_id": order_id,
             "thesis": "이미 체결된 내 주문에 사후 연결",
         },
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     assert journal_res.status_code == 201, journal_res.text
     assert journal_res.json()["order_id"] == order_id
@@ -335,7 +338,8 @@ def test_cannot_create_journal_linked_to_other_users_order(db):
     victim_order = client.post(
         f"/v1/portfolios/{portfolio_victim}/orders",
         json={"instrument_id": str(instrument.id), "side": "BUY", "order_type": "MARKET", "quantity": "1"},
-        headers=_idem_headers(token_victim),
+        cookies=token_victim,
+        headers=_idem_headers(),
     ).json()
 
     token_attacker, portfolio_attacker = signup_user("orderattacker")
@@ -347,12 +351,12 @@ def test_cannot_create_journal_linked_to_other_users_order(db):
             "order_id": victim_order["id"],
             "thesis": "타인 주문에 무단 연결 시도",
         },
-        headers=_auth(token_attacker),
+        cookies=_auth(token_attacker),
     )
     assert res.status_code == 404, res.text
 
     # 거절된 요청은 일지 자체를 남기지 않는다
-    attacker_journals = client.get("/v1/me/journals", headers=_auth(token_attacker)).json()
+    attacker_journals = client.get("/v1/me/journals", cookies=_auth(token_attacker)).json()
     assert all(j["thesis"] != "타인 주문에 무단 연결 시도" for j in attacker_journals)
 
 
@@ -368,11 +372,11 @@ def test_create_journal_with_nonexistent_order_id_returns_404(db):
             "order_id": str(uuid.uuid4()),
             "thesis": "존재하지 않는 주문 참조",
         },
-        headers=_auth(token),
+        cookies=_auth(token),
     )
     assert res.status_code == 404, res.text
 
-    journals = client.get("/v1/me/journals", headers=_auth(token)).json()
+    journals = client.get("/v1/me/journals", cookies=_auth(token)).json()
     assert all(j["thesis"] != "존재하지 않는 주문 참조" for j in journals)
 
 
@@ -397,7 +401,8 @@ def test_create_order_with_nonexistent_pre_trade_journal_id_returns_404(db):
             "quantity": "1",
             "pre_trade_journal_id": str(uuid.uuid4()),
         },
-        headers=_idem_headers(token),
+        cookies=token,
+        headers=_idem_headers(),
     )
     assert res.status_code == 404, res.text
 
@@ -421,7 +426,7 @@ def test_rejected_order_leaves_no_partial_state_for_other_users_journal(db):
     victim_journal = client.post(
         "/v1/journals/pre-trade",
         json={"portfolio_id": portfolio_victim, "instrument_id": str(instrument.id), "thesis": "상태 보존 확인용"},
-        headers=_auth(token_victim),
+        cookies=_auth(token_victim),
     ).json()
 
     token_attacker, portfolio_attacker = signup_user("stateattacker")
@@ -441,7 +446,8 @@ def test_rejected_order_leaves_no_partial_state_for_other_users_journal(db):
             "quantity": "1",
             "pre_trade_journal_id": victim_journal["id"],
         },
-        headers=_idem_headers(token_attacker),
+        cookies=token_attacker,
+        headers=_idem_headers(),
     )
     assert res.status_code == 404, res.text
 
@@ -467,7 +473,7 @@ def test_own_order_journal_backfill_still_works_after_ownership_validation(db):
     journal = client.post(
         "/v1/journals/pre-trade",
         json={"portfolio_id": portfolio_id, "instrument_id": str(instrument.id), "thesis": "회귀 확인용 일지"},
-        headers=_auth(token),
+        cookies=_auth(token),
     ).json()
     assert journal["order_id"] is None
 
@@ -480,9 +486,10 @@ def test_own_order_journal_backfill_still_works_after_ownership_validation(db):
             "quantity": "1",
             "pre_trade_journal_id": journal["id"],
         },
-        headers=_idem_headers(token),
+        cookies=token,
+        headers=_idem_headers(),
     )
     assert order_res.status_code == 201, order_res.text
 
-    journal_after = client.get(f"/v1/journals/{journal['id']}", headers=_auth(token))
+    journal_after = client.get(f"/v1/journals/{journal['id']}", cookies=_auth(token))
     assert journal_after.json()["order_id"] == order_res.json()["id"]

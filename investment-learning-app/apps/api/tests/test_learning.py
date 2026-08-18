@@ -1,8 +1,8 @@
 from tests.conftest import client, signup_user
 
 
-def _auth(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}"}
+def _auth(cookies: dict) -> dict:
+    return cookies
 
 
 def test_learning_paths_include_seeded_lessons():
@@ -35,7 +35,7 @@ def test_complete_lesson_awards_xp_once():
     token, _ = signup_user("learner")
     lesson_id = _find_first_lesson_id()
 
-    detail = client.get(f"/v1/lessons/{lesson_id}", headers=_auth(token))
+    detail = client.get(f"/v1/lessons/{lesson_id}", cookies=_auth(token))
     assert detail.status_code == 200
     body = detail.json()
     assert len(body["content_blocks"]) == 4
@@ -43,19 +43,19 @@ def test_complete_lesson_awards_xp_once():
     assert body["progress"] is None
 
     first = client.post(
-        f"/v1/lessons/{lesson_id}/progress", json={"status": "COMPLETED"}, headers=_auth(token)
+        f"/v1/lessons/{lesson_id}/progress", json={"status": "COMPLETED"}, cookies=_auth(token)
     )
     assert first.status_code == 200
     assert first.json()["xp_awarded"] == 10
 
     # 이미 완료 처리된 강의를 다시 완료 처리해도 XP가 중복 지급되지 않는다
     second = client.post(
-        f"/v1/lessons/{lesson_id}/progress", json={"status": "COMPLETED"}, headers=_auth(token)
+        f"/v1/lessons/{lesson_id}/progress", json={"status": "COMPLETED"}, cookies=_auth(token)
     )
     assert second.status_code == 200
     assert second.json()["xp_awarded"] == 0
 
-    summary = client.get("/v1/me/learning-summary", headers=_auth(token)).json()
+    summary = client.get("/v1/me/learning-summary", cookies=_auth(token)).json()
     assert summary["total_xp"] == 10
     assert summary["lessons_completed"] == 1
     assert summary["current_streak_days"] == 1
@@ -64,10 +64,10 @@ def test_complete_lesson_awards_xp_once():
 def test_quiz_with_empty_answers_fails_without_xp():
     token, _ = signup_user("quiztaker")
     lesson_id = _find_first_lesson_id()
-    detail = client.get(f"/v1/lessons/{lesson_id}", headers=_auth(token)).json()
+    detail = client.get(f"/v1/lessons/{lesson_id}", cookies=_auth(token)).json()
     quiz_id = detail["quiz"]["id"]
 
-    res = client.post(f"/v1/quizzes/{quiz_id}/attempts", json={"answers": {}}, headers=_auth(token))
+    res = client.post(f"/v1/quizzes/{quiz_id}/attempts", json={"answers": {}}, cookies=_auth(token))
     assert res.status_code == 200
     body = res.json()
     assert body["passed"] is False
@@ -83,7 +83,7 @@ def test_quiz_pass_flow(db):
 
     token, _ = signup_user("passer")
     lesson_id = _find_first_lesson_id()
-    detail = client.get(f"/v1/lessons/{lesson_id}", headers=_auth(token)).json()
+    detail = client.get(f"/v1/lessons/{lesson_id}", cookies=_auth(token)).json()
     quiz_id = detail["quiz"]["id"]
 
     questions = db.query(Question).filter(Question.quiz_id == quiz_id).all()
@@ -92,7 +92,7 @@ def test_quiz_pass_flow(db):
         correct_choice = db.query(Choice).filter(Choice.question_id == question.id, Choice.is_correct.is_(True)).first()
         answers[str(question.id)] = [str(correct_choice.id)]
 
-    res = client.post(f"/v1/quizzes/{quiz_id}/attempts", json={"answers": answers}, headers=_auth(token))
+    res = client.post(f"/v1/quizzes/{quiz_id}/attempts", json={"answers": answers}, cookies=_auth(token))
     assert res.status_code == 200
     body = res.json()
     assert body["passed"] is True
@@ -100,10 +100,10 @@ def test_quiz_pass_flow(db):
     assert body["xp_awarded"] == 15
 
     # 재응시해서 다시 합격해도 XP는 다시 지급되지 않는다
-    res2 = client.post(f"/v1/quizzes/{quiz_id}/attempts", json={"answers": answers}, headers=_auth(token))
+    res2 = client.post(f"/v1/quizzes/{quiz_id}/attempts", json={"answers": answers}, cookies=_auth(token))
     assert res2.json()["xp_awarded"] == 0
 
-    summary = client.get("/v1/me/learning-summary", headers=_auth(token)).json()
+    summary = client.get("/v1/me/learning-summary", cookies=_auth(token)).json()
     assert summary["quizzes_passed"] == 1
     assert summary["total_xp"] == 15
 
@@ -111,10 +111,10 @@ def test_quiz_pass_flow(db):
 def test_get_quiz_returns_questions_without_correct_answer():
     token, _ = signup_user("quizreader")
     lesson_id = _find_first_lesson_id()
-    detail = client.get(f"/v1/lessons/{lesson_id}", headers=_auth(token)).json()
+    detail = client.get(f"/v1/lessons/{lesson_id}", cookies=_auth(token)).json()
     quiz_id = detail["quiz"]["id"]
 
-    res = client.get(f"/v1/quizzes/{quiz_id}", headers=_auth(token))
+    res = client.get(f"/v1/quizzes/{quiz_id}", cookies=_auth(token))
     assert res.status_code == 200
     body = res.json()
     assert body["id"] == quiz_id
@@ -139,5 +139,5 @@ def test_daily_xp_cap_enforced(db):
     db.commit()
     assert awarded == gamification.XP_DAILY_CAP  # 1000을 요청해도 일일 상한(100)까지만 지급된다
 
-    summary = client.get("/v1/me/learning-summary", headers=_auth(token)).json()
+    summary = client.get("/v1/me/learning-summary", cookies=_auth(token)).json()
     assert summary["todays_xp"] == gamification.XP_DAILY_CAP

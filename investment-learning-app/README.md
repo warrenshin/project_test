@@ -133,3 +133,12 @@ Playwright E2E 테스트 실행 방법은 `apps/web/README.md`를 참고한다.
       `order_id` 자동 연결(처분효과 탐지에 필요)을 추가했다(`apps/api/README.md`
       참고). 범위 밖: 실제 투자·증권계좌 연결, 6~30강, 나머지 4개 행동편향 유형,
       실시간 시세 공급자 교체, 실제 Claude API 연결, 디자인 전면 개편.
+- [x] 보안 강화: 인증 토큰을 프런트엔드 `localStorage`(JS로 읽을 수 있어 XSS에
+      취약)에서 서버가 관리하는 **HttpOnly Secure 쿠키**로 전환했다. access/refresh
+      토큰은 이제 API 응답 JSON에 전혀 포함되지 않으며, `Authorization: Bearer`
+      헤더 방식은 완전히 제거했다. CSRF는 `SameSite=Lax` 쿠키 + 상태변경 요청
+      Origin 검증 미들웨어 조합으로 방어한다. production 환경은 안전하지 않은 쿠키
+      설정(`COOKIE_SECURE=false` 등)이면 앱 기동 자체가 실패하도록 막아뒀다.
+      refresh-token 회전·재사용 탐지는 기존 로직을 그대로 유지했다. 자세한 쿠키
+      정책·CSRF 근거는 `apps/api/README.md`, 프런트엔드 변경사항은
+      `apps/web/README.md` 참고.

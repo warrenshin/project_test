@@ -109,15 +109,89 @@ test.describe("핵심 E2E 사용자 흐름", () => {
     await page.getByRole("button", { name: "AI 코칭 확인" }).click();
     await expect(page.getByText(/규칙 기반 폴백 코칭으로 대체/)).toBeVisible();
 
-    // 10) 새로고침 후에도 로그인/데이터 유지 확인
+    // 10) 새로고침 후에도 로그인/데이터 유지 확인 (HttpOnly 쿠키가 유지됨을 검증)
     await page.reload();
     await expect(page.getByRole("heading", { name: "투자일지" })).toBeVisible();
     await expect(page.getByText("계획대로 실행", { exact: true })).toBeVisible();
 
-    // 11) 재로그인 후에도 데이터 유지 확인
-    await page.evaluate(() => window.localStorage.clear());
+    // 11) 로그아웃 후 보호화면 접근 차단 + 뒤로가기로도 이전 데이터가 보이지 않음
+    await page.goto("/portfolio");
+    await expect(page.getByText("000660")).toBeVisible();
+    await page.goto("/me");
+    await page.getByRole("button", { name: "로그아웃" }).click();
+    await expect(page).toHaveURL("/login");
+
+    await page.goBack(); // -> /me (bfcache 복원이든 새로 로드든)
+    await page.goBack(); // -> /portfolio
+    await expect(page.getByText("000660")).not.toBeVisible();
+
+    // 12) 재로그인 후에도 데이터 유지 확인
     await logIn(page, email);
     await page.goto("/portfolio");
     await expect(page.getByText("000660")).toBeVisible();
+  });
+});
+
+// 쿠키 이름은 apps/api/app/core/config.py의 기본값과 일치해야 한다.
+const ACCESS_COOKIE = "ilapp_access_token";
+const REFRESH_COOKIE = "ilapp_refresh_token";
+
+test.describe("access token 만료·refresh 동시성", () => {
+  test("여러 요청이 동시에 401을 받아도 refresh는 한 번만 호출된다(single-flight)", async ({
+    page,
+    context,
+  }) => {
+    const email = uniqueEmail();
+    await signUp(page, email); // 이 시점에 정상적으로 로그인된 상태다
+
+    // access 쿠키만 손상시킨다 — refresh 쿠키는 유효하게 남겨둔다.
+    const cookies = await context.cookies();
+    const access = cookies.find((c) => c.name === ACCESS_COOKIE);
+    expect(access).toBeTruthy();
+    await context.addCookies([{ ...access!, value: "corrupted-value" }]);
+
+    let refreshCalls = 0;
+    await page.route("**/v1/auth/refresh", (route) => {
+      refreshCalls++;
+      route.continue();
+    });
+
+    // 클라이언트 사이드 네비게이션(전체 리로드 없이)으로 포트폴리오 화면에 진입한다.
+    // 이 화면은 마운트 시 getPositions/getPerformance 두 개의 인증 요청을 동시에 보낸다.
+    await page.getByRole("link", { name: "포트폴리오 자세히 보기" }).click();
+    await expect(page).toHaveURL("/portfolio");
+    await expect(page.getByRole("heading", { name: "포트폴리오" })).toBeVisible();
+
+    expect(refreshCalls).toBe(1);
+  });
+
+  test("refresh까지 실패하면 로그인 화면으로 이동하고 무한 재시도하지 않는다", async ({
+    page,
+    context,
+  }) => {
+    const email = uniqueEmail();
+    await signUp(page, email);
+
+    const cookies = await context.cookies();
+    const access = cookies.find((c) => c.name === ACCESS_COOKIE);
+    const refresh = cookies.find((c) => c.name === REFRESH_COOKIE);
+    expect(access).toBeTruthy();
+    expect(refresh).toBeTruthy();
+    await context.addCookies([
+      { ...access!, value: "corrupted-value" },
+      { ...refresh!, value: "corrupted-value" },
+    ]);
+
+    let refreshCalls = 0;
+    await page.route("**/v1/auth/refresh", (route) => {
+      refreshCalls++;
+      route.continue();
+    });
+
+    await page.getByRole("link", { name: "포트폴리오 자세히 보기" }).click();
+
+    await expect(page).toHaveURL("/login");
+    // 실패한 refresh를 계속 재시도하지 않는다 — 원래 요청당 최대 1회만 시도한다.
+    expect(refreshCalls).toBe(1);
   });
 });

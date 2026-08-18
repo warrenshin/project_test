@@ -1,5 +1,7 @@
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,9 +41,44 @@ class Settings(BaseSettings):
     # apps/web(Next.js) 로컬 개발 서버 CORS 허용 origin (쉼표로 구분)
     cors_allowed_origins_raw: str = "http://localhost:3000,http://127.0.0.1:3000"
 
+    # --- 인증 쿠키 정책 (HttpOnly Secure 쿠키 기반 인증, 2026-08 마이그레이션) ---
+    # 쿠키 이름
+    access_cookie_name: str = "ilapp_access_token"
+    refresh_cookie_name: str = "ilapp_refresh_token"
+    # 개발 기본값은 HTTP localhost에서 동작해야 하므로 Secure=false.
+    # production에서는 반드시 true로 재정의해야 하며, 아래 검증기가 이를 강제한다.
+    cookie_secure: bool = False
+    cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    # 하위 도메인 간 공유가 실제로 필요하지 않은 한 Domain 속성은 비워 둔다
+    # (host-only 쿠키가 더 안전하고 좁은 기본값이다).
+    cookie_domain: str | None = None
+    # refresh 쿠키는 refresh/logout 엔드포인트에만 필요하므로 Path를 좁게 제한해
+    # 다른 API 요청에는 아예 실리지 않게 한다. access 쿠키는 모든 API 호출에 필요하다.
+    access_cookie_path: str = "/"
+    refresh_cookie_path: str = "/v1/auth"
+
     @property
     def cors_allowed_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins_raw.split(",") if o.strip()]
+
+    @model_validator(mode="after")
+    def _validate_production_security_policy(self) -> "Settings":
+        """production 환경에서 안전하지 않은 기본값으로 기동되는 것을 막는다.
+
+        HttpOnly 쿠키 인증에서 Secure 플래그 누락은 토큰이 평문 HTTP로 노출될 수
+        있다는 뜻이므로, 이 조합은 조용히 경고하는 대신 앱 기동 자체를 실패시킨다.
+        """
+        if self.environment == "production":
+            if not self.cookie_secure:
+                raise ValueError(
+                    "production 환경에서는 COOKIE_SECURE=true가 필수입니다 "
+                    "(HttpOnly Secure 쿠키 정책 — 평문 HTTP로 인증 쿠키가 노출되는 것을 막는다)."
+                )
+            if self.cookie_samesite == "none" and not self.cookie_secure:
+                raise ValueError("SameSite=None 쿠키는 Secure=true와 함께만 사용할 수 있습니다.")
+            if self.jwt_secret == "change-me-in-env":
+                raise ValueError("production 환경에서는 JWT_SECRET을 반드시 변경해야 합니다.")
+        return self
 
 
 @lru_cache
