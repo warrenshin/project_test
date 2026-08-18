@@ -229,16 +229,88 @@ docker compose logs -f web        # 프런트엔드만
 docker compose logs -f postgres   # DB만
 ```
 
+### CI에서의 Docker Compose 통합 검증
+
+이 저장소를 개발한 샌드박스는 Docker 데몬을 구동할 수 없는 제한된 환경이라
+(아래 "알려진 제한사항" 참고), 실제 Docker 실행 검증은 GitHub Actions의
+Ubuntu runner에서 수행한다(`.github/workflows/investment-learning-docker-build-ci.yml`).
+이 워크플로는 `investment-learning-app/apps/api/**`, `apps/web/**`,
+`docker-compose.yml`이 바뀐 PR/`main` push에서 실행되며 다음을 실제로
+확인한다:
+
+- API/Web production 이미지 빌드, non-root 사용자, 올바른 HEALTHCHECK,
+  이미지에 `.env`/`.git`/테스트/Python 캐시가 없는지(`build-*-image` job).
+- 빈 volume에서 `docker compose build --no-cache` → `docker compose up -d`로
+  최초 실행, `/health/live`·`/health/ready`·Web `/api/health` 확인, 1~5강·
+  데모 종목 시드 확인, smoke test(`compose-integration` job).
+- migration/seed를 컨테이너가 뜬 상태에서 다시 실행해도 행 수가 늘지 않는지
+  (멱등성 검증).
+- web → api → postgres 순서로 각각 재시작한 뒤 health가 다시 정상화되는지,
+  재시작 전 만든 테스트 사용자·투자일지가 재시작 후에도 그대로 남아 있는지
+  (`scripts/restart_persistence_test.py`로 검증 — 운영 데이터를 지우는 기능은
+  없다).
+- 잘못된 production 쿠키 설정, DB가 늦게 뜨는 상황, migration이 적용되지
+  않은 DB에서 각각 안전하게 반응하는지(`failure-scenarios` job, 격리된
+  임시 컨테이너만 사용 — 위 통합 테스트 스택은 건드리지 않는다).
+
+CI는 GitHub repository secret 없이도 동작한다 — `JWT_SECRET` 등은 매 실행마다
+무작위로 새로 생성해 로그에 마스킹 처리한다(`.github/scripts/generate_ci_env.sh`).
+어떤 job도 컨테이너 레지스트리에 이미지를 push하거나 외부 환경에 배포하지
+않는다. 실행 결과는 저장소의 Actions 탭에서 이 워크플로 이름으로 확인할 수
+있다.
+
+### 로컬 Docker Desktop / WSL2에서 실행하기
+
+위 "빠른 시작"과 동일한 명령이지만, 최초 실행은 base 이미지 다운로드와
+`npm ci`/`pip install`을 새로 하기 때문에 몇 분 정도 걸릴 수 있다(이후
+재실행은 Docker 레이어 캐시 덕분에 훨씬 빠르다):
+
+```bash
+cd investment-learning-app
+cp .env.example .env
+docker compose up --build
+```
+
+- **health 확인**: `curl http://localhost:8000/health/live`,
+  `curl http://localhost:8000/health/ready`, `curl http://localhost:3000/api/health`.
+  또는 `docker compose ps`로 각 컨테이너의 `STATUS` 열에 `(healthy)`가
+  붙는지 확인한다.
+- **로그 확인**: 위 "로그 확인" 절의 `docker compose logs -f [서비스명]`.
+- **데이터 유지 확인**: 회원가입 후 `docker compose restart api` (또는
+  `web`/`postgres`)를 실행하고, health가 다시 정상화된 뒤 같은 계정으로
+  다시 로그인해 데이터가 남아 있는지 확인한다. 자동화된 버전은
+  `apps/api/scripts/restart_persistence_test.py` 참고(운영 데이터를 지우는
+  기능은 없다 — 새 테스트 계정을 만들고 조회만 한다).
+
+#### ⚠️ 로컬 데이터 volume 완전 삭제 (주의 — 되돌릴 수 없음)
+
+`docker compose down`은 컨테이너만 정리하고 PostgreSQL 데이터는 named
+volume(`postgres_data`)에 그대로 남는다. **아래 명령은 그 volume까지
+영구적으로 삭제한다 — 회원가입한 모든 계정, 투자일지, 포트폴리오 데이터가
+전부 사라지며 되돌릴 수 없다.** 로컬에서 완전히 새로 시작하고 싶을 때만,
+정말로 필요한 경우에만 실행한다:
+
+```bash
+docker compose down -v
+```
+
+CI 워크플로도 매 실행 끝에 이 명령을 쓰지만, 그건 CI 러너 안에서만 존재하는
+격리된 볼륨이라 안전하다 — **로컬 개발 환경이나 운영 환경에서는 이 명령이
+실제 데이터를 지운다는 점을 항상 염두에 둘 것.**
+
 ### 알려진 제한사항 (이번 staging 준비 범위)
 
 - 이 저장소를 개발한 샌드박스는 Docker 데몬을 실제로 구동할 수 없는 제한된
   컨테이너 환경이라(중첩 컨테이너 미지원), `docker compose up --build`를 이
-  환경에서 실제로 실행해 검증하지 못했다. Dockerfile·docker-compose.yml·
-  헬스체크·entrypoint 스크립트는 코드 검토와 (가능한 범위의) 개별 요소
+  환경(개발 세션의 샌드박스)에서 직접 실행해 검증하지는 못했다. 대신 위
+  "CI에서의 Docker Compose 통합 검증" 절에서 설명한 GitHub Actions 워크플로가
+  실제 Docker 데몬이 있는 Ubuntu runner에서 최초 실행·health·멱등성·재시작 후
+  데이터 유지·장애 시나리오까지 실제로 검증한다 — 그 실행 결과는 PR의 Checks
+  탭에서 확인할 수 있다. 이 세션에서는 Dockerfile·docker-compose.yml·
+  헬스체크·entrypoint 스크립트를 코드 검토와 (가능한 범위의) 개별 요소
   검증(예: `docker compose config`로 구성 유효성 확인, Next.js standalone
-  서버를 Docker 밖에서 직접 실행해 정상 동작 확인)으로 만들었다 — 실제 Docker
-  환경에서의 최초 실행 시 예상치 못한 문제가 있을 수 있으니 한 번은 직접
-  확인하기를 권장한다.
+  서버를 Docker 밖에서 직접 실행해 정상 동작 확인)으로 보강했다 — CI 실행
+  결과가 이 항목의 실질적인 검증 결과다.
 - 라이브 시장 데이터 공급자 연동과 실제 Anthropic API 연결은 이번 범위에서도
   다루지 않는다 — `ANTHROPIC_API_KEY`를 비워두면 규칙 기반 AI 코칭 폴백
   경로로 동작한다.

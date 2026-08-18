@@ -127,6 +127,9 @@ install`을 실행할 필요가 없다(`playwright.config.ts`의 `launchOptions.
   하지 않았다.
 - 이 저장소를 개발한 샌드박스는 Docker 데몬을 구동할 수 없는 환경이라
   `docker compose up --build`로 이 프런트엔드 이미지를 실제로 빌드·실행하는
-  것까지는 검증하지 못했다. `next build`(production 빌드)와 standalone 서버
+  것까지는 이 세션에서 직접 검증하지 못했다 — 대신 GitHub Actions
+  (`investment-learning-docker-build-ci.yml`)이 Docker 데몬이 있는 Ubuntu
+  runner에서 실제로 검증한다(루트 `README.md`의 "CI에서의 Docker Compose
+  통합 검증" 참고). `next build`(production 빌드)와 standalone 서버
   (`node .next/standalone/server.js`) 직접 실행은 이 환경에서 확인했다 — 실제
   Docker 환경에서 한 번은 직접 확인을 권장한다.
