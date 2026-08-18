@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.health import router as health_router
 from app.api.v1 import router as v1_router
 from app.core.config import get_settings
 from app.core.csrf import OriginCheckMiddleware
@@ -34,7 +35,9 @@ app.add_middleware(
 
 @app.get("/healthz", tags=["ops"])
 def healthz():
+    # 하위 호환용 별칭 — 신규 코드는 /health/live, /health/ready를 쓴다.
     return {"status": "ok", "environment": settings.environment}
 
 
+app.include_router(health_router)
 app.include_router(v1_router, prefix=settings.api_v1_prefix)

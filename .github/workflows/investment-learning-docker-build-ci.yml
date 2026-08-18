@@ -1,0 +1,35 @@
+name: investment-learning-app Docker Build CI
+
+# 두 production 이미지가 실제로 빌드되는지만 확인한다. 어떤 레지스트리에도
+# push하지 않고 어떤 환경에도 배포하지 않는다 — 로컬 빌드 검증 전용이다.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "investment-learning-app/apps/api/**"
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/docker-compose.yml"
+  pull_request:
+    paths:
+      - "investment-learning-app/apps/api/**"
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/docker-compose.yml"
+
+jobs:
+  build-api-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API production image
+        run: docker build -t investment-learning-api:ci ./investment-learning-app/apps/api
+
+  build-web-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Web production image
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 \
+            -t investment-learning-web:ci \
+            ./investment-learning-app/apps/web
