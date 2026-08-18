@@ -16,13 +16,10 @@ import type {
   PositionResponse,
   QuizAttemptResponse,
   QuizDetailResponse,
-  TokenResponse,
+  UserResponse,
 } from "./types";
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
-const ACCESS_TOKEN_KEY = "ilapp_access_token";
-const REFRESH_TOKEN_KEY = "ilapp_refresh_token";
 
 export class ApiError extends Error {
   status: number;
@@ -32,22 +29,28 @@ export class ApiError extends Error {
   }
 }
 
-export function getStoredTokens(): { accessToken: string | null; refreshToken: string | null } {
-  if (typeof window === "undefined") return { accessToken: null, refreshToken: null };
-  return {
-    accessToken: window.localStorage.getItem(ACCESS_TOKEN_KEY),
-    refreshToken: window.localStorage.getItem(REFRESH_TOKEN_KEY),
-  };
+// 2026-08: access/refresh 토큰을 localStorage가 아니라 서버가 관리하는 HttpOnly
+// Secure 쿠키로 옮겼다 — JS가 토큰 문자열을 절대 읽거나 다루지 않는다. 이제
+// 인증은 매 요청에 credentials: "include"로 쿠키를 실어 보내는 것으로 끝난다.
+
+/** 인증이 완전히 실패(refresh까지 실패)했을 때 앱에 알리는 훅. AuthProvider가
+ * 등록해서 전역 로그인 상태를 "미인증"으로 내리고 로그인 화면으로 보낸다. */
+let onAuthFailure: (() => void) | null = null;
+export function setAuthFailureHandler(handler: (() => void) | null) {
+  onAuthFailure = handler;
 }
 
-export function storeTokens(tokens: TokenResponse) {
-  window.localStorage.setItem(ACCESS_TOKEN_KEY, tokens.access_token);
-  window.localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token);
-}
-
-export function clearTokens() {
-  window.localStorage.removeItem(ACCESS_TOKEN_KEY);
-  window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+// --- 레거시 localStorage 토큰 정리 (마이그레이션 shim) ---
+// TODO(cookie-auth-migration): 예전 버전이 localStorage에 남겨둔 access/refresh
+// token을 지운다. 값을 읽지도, 서버로 보내지도, 로그로 남기지도 않는다 — 존재
+// 여부만 보고 즉시 삭제한다. refresh token 최대 수명(기본 30일)이 지나 예전
+// 세션이 전부 만료된 뒤에는 이 함수와 호출부를 통째로 지워도 안전하다.
+const LEGACY_LOCALSTORAGE_TOKEN_KEYS = ["ilapp_access_token", "ilapp_refresh_token"];
+export function purgeLegacyLocalStorageTokens(): void {
+  if (typeof window === "undefined") return;
+  for (const key of LEGACY_LOCALSTORAGE_TOKEN_KEYS) {
+    window.localStorage.removeItem(key);
+  }
 }
 
 async function parseErrorMessage(res: Response): Promise<string> {
@@ -63,21 +66,26 @@ async function parseErrorMessage(res: Response): Promise<string> {
   }
 }
 
-async function refreshAccessToken(): Promise<boolean> {
-  const { refreshToken } = getStoredTokens();
-  if (!refreshToken) return false;
-  const res = await fetch(`${API_BASE_URL}/v1/auth/refresh`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
-  if (!res.ok) {
-    clearTokens();
-    return false;
-  }
-  const tokens: TokenResponse = await res.json();
-  storeTokens(tokens);
-  return true;
+// 여러 요청이 동시에 401을 받아도 /v1/auth/refresh 호출은 한 번만 나가도록
+// 진행 중인 refresh Promise를 공유한다(single-flight).
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshAccessToken(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    try {
+      const res = await fetch(`${API_BASE_URL}/v1/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+      });
+      return res.ok;
+    } catch {
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
 interface RequestOptions {
@@ -90,11 +98,6 @@ interface RequestOptions {
 async function request<T>(path: string, options: RequestOptions = {}, _retried = false): Promise<T> {
   const { method = "GET", body, auth = true, idempotencyKey } = options;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-
-  if (auth) {
-    const { accessToken } = getStoredTokens();
-    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
-  }
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
 
   let res: Response;
@@ -102,6 +105,7 @@ async function request<T>(path: string, options: RequestOptions = {}, _retried =
     res = await fetch(`${API_BASE_URL}${path}`, {
       method,
       headers,
+      credentials: "include", // 인증 쿠키를 실어 보낸다. Authorization 헤더는 더 이상 쓰지 않는다.
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -111,6 +115,8 @@ async function request<T>(path: string, options: RequestOptions = {}, _retried =
   if (res.status === 401 && auth && !_retried) {
     const refreshed = await refreshAccessToken();
     if (refreshed) return request<T>(path, options, true);
+    // refresh까지 실패했다 — 무한 재시도하지 않고 앱에 로그아웃을 알린 뒤 에러로 종료한다.
+    onAuthFailure?.();
   }
 
   if (!res.ok) {
@@ -129,11 +135,18 @@ export function signup(payload: {
   birth_date: string;
   consents: { consent_type: "TERMS" | "PRIVACY" | "MARKETING"; version: string; agreed: boolean }[];
 }) {
-  return request<TokenResponse>("/v1/auth/signup", { method: "POST", body: payload, auth: false });
+  return request<UserResponse>("/v1/auth/signup", { method: "POST", body: payload, auth: false });
 }
 
 export function login(payload: { email: string; password: string }) {
-  return request<TokenResponse>("/v1/auth/login", { method: "POST", body: payload, auth: false });
+  return request<UserResponse>("/v1/auth/login", { method: "POST", body: payload, auth: false });
+}
+
+/** 현재 인증 상태 확인용. 실패(401)하면 로그인되어 있지 않은 것이다. */
+export const getMe = () => request<UserResponse>("/v1/auth/me");
+
+export function logout(): Promise<void> {
+  return request<void>("/v1/auth/logout", { method: "POST" });
 }
 
 // --- Learning ---

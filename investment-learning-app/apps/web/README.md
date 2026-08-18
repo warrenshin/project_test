@@ -2,8 +2,19 @@
 
 `apps/api`(FastAPI)와 통신하는 사용자용 프런트엔드. React 19 + Next.js 16 App Router +
 TypeScript, 별도 CSS 프레임워크 없이 `src/app/globals.css`의 디자인 토큰만 사용한다.
-클라이언트가 로그인 토큰을 `localStorage`에 저장하고 API를 직접 호출하는 구조라 서버
-세션·쿠키는 사용하지 않는다.
+
+**인증(2026-08부터)**: 서버가 관리하는 HttpOnly Secure 쿠키 기반 인증을 쓴다.
+access/refresh 토큰은 JavaScript가 절대 읽거나 저장하지 않는다 — `localStorage`에
+아무 것도 남기지 않으며, `Authorization` 헤더도 만들지 않는다. `src/lib/api.ts`의
+모든 요청은 `credentials: "include"`로 쿠키를 함께 보내고, 로그인 상태는
+`GET /v1/auth/me`로 서버에 물어 확인한다(`src/lib/auth-context.tsx`). 자세한 정책은
+`apps/api/README.md`의 "인증 쿠키 정책"/"CSRF 방어" 절 참고.
+
+이전 버전 사용자가 남긴 `localStorage`의 예전 토큰은 앱 시작 시 값을 읽거나
+서버로 보내지 않고 즉시 삭제한다(`src/lib/api.ts`의
+`purgeLegacyLocalStorageTokens`) — 삭제된 예전 세션의 사용자는 다시 로그인해야
+한다. 이 마이그레이션 코드는 예전 세션이 모두 자연 만료(refresh 최대 수명, 기본
+30일)된 뒤에는 안전하게 제거할 수 있도록 별도 함수로 분리해 두었다.
 
 ## 핵심 사용자 흐름
 
@@ -52,7 +63,11 @@ python -m scripts.refresh_demo_market_data
 
 `e2e/full-flow.spec.ts`는 위 핵심 흐름 전체를 브라우저로 실제 클릭해가며 검증하고,
 새로고침·재로그인 후에도 데이터(포트폴리오 보유 종목, 일지 복기 결과)가 유지되는지도
-함께 확인한다.
+함께 확인한다. 이어서 로그아웃 후 보호 화면 접근이 막히는지(뒤로가기로 이전 화면이
+bfcache에서 되살아나도 보호 데이터가 노출되지 않는지)와, access token 만료 시
+refresh가 요청당 최대 1회만 재시도되는지(동시에 여러 요청이 401을 받아도 refresh
+호출은 한 번만 나가는 single-flight 동작, refresh까지 실패하면 로그인 화면으로
+이동하고 무한 재시도하지 않는 것)를 별도 `describe` 블록으로 검증한다.
 
 ```bash
 cd apps/web
