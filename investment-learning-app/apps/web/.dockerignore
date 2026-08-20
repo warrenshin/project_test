@@ -1,0 +1,15 @@
+node_modules/
+.next/
+e2e/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+.git/
+.gitignore
+*.md
+Dockerfile
+.dockerignore
+AGENTS.md
+CLAUDE.md

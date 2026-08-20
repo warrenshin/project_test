@@ -26,7 +26,19 @@ access/refresh 토큰은 JavaScript가 절대 읽거나 저장하지 않는다 �
 (`src/components/States.tsx`, `src/components/VirtualFundsBanner.tsx`,
 `src/components/MarketDataBadge.tsx`).
 
-## 로컬 실행
+## Docker로 실행
+
+루트 `README.md`의 "빠른 시작 (Docker Compose, 한 번의 명령)"을 따라
+저장소 루트(`investment-learning-app`)에서 `docker compose up --build` 한 번으로
+Postgres·API와 함께 이 프런트엔드도 production 빌드로 뜬다
+(http://localhost:3000). `Dockerfile`은 `npm ci`로 `package-lock.json`에 고정된
+버전 그대로 설치하고, Next.js의 `output: "standalone"`(`next.config.ts`)으로
+생성한 self-contained 서버 번들만 최종 이미지에 담아 non-root 사용자로
+실행한다. `NEXT_PUBLIC_API_BASE_URL`은 브라우저가 직접 호출하는 주소라
+**빌드 시점**에 클라이언트 번들에 그대로 굳어 들어간다(Docker build arg로
+전달, 비밀정보 아님) — 배포 도메인이 바뀌면 이미지도 다시 빌드해야 한다.
+
+## 로컬 실행 (Docker 없이, 개발모드)
 
 백엔드(`apps/api`)가 먼저 떠 있어야 한다. `apps/api/README.md`를 따라
 Postgres 기동·마이그레이션·`uvicorn`까지 실행한 뒤:
@@ -38,12 +50,25 @@ npm run dev            # http://localhost:3000
 ```
 
 기본적으로 `http://localhost:8000`의 API를 호출한다. 다른 포트/호스트를 쓰려면
-`NEXT_PUBLIC_API_BASE_URL` 환경변수를 설정한다(예: `.env.local`).
+`NEXT_PUBLIC_API_BASE_URL` 환경변수를 설정한다(`.env.example` 참고,
+`cp .env.example .env.local`).
 
 백엔드는 기본적으로 `http://localhost:3000`, `http://127.0.0.1:3000` origin만
 CORS를 허용한다(`apps/api/app/core/config.py`의 `cors_allowed_origins_raw`). 다른
 포트에서 프런트엔드를 띄우면 백엔드 쪽 `CORS_ALLOWED_ORIGINS_RAW` 환경변수도 함께
 맞춰야 한다.
+
+### Production-like 실행 (Docker 없이)
+
+배포와 동일한 production 빌드 방식을 직접 확인하고 싶을 때:
+
+```bash
+npm run build   # next build
+npm run start   # next start — production 서버, hot-reload 없음
+```
+
+`GET /api/health`로 프런트엔드 서버 프로세스가 살아 있는지 확인할 수 있다
+(백엔드나 외부 서비스에는 의존하지 않는 순수 liveness 체크).
 
 ### 데모 시세가 "오래되었다"고 주문이 거부될 때
 
@@ -100,3 +125,11 @@ install`을 실행할 필요가 없다(`playwright.config.ts`의 `launchOptions.
 - 학습 콘텐츠는 1~5강만 있다. 6강 이후는 `/learn` 목록에 나타나지 않는다.
 - 디자인은 기존 최소 디자인 시스템(`globals.css`)을 그대로 사용했고 전면 개편은
   하지 않았다.
+- 이 저장소를 개발한 샌드박스는 Docker 데몬을 구동할 수 없는 환경이라
+  `docker compose up --build`로 이 프런트엔드 이미지를 실제로 빌드·실행하는
+  것까지는 이 세션에서 직접 검증하지 못했다 — 대신 GitHub Actions
+  (`investment-learning-docker-build-ci.yml`)이 Docker 데몬이 있는 Ubuntu
+  runner에서 실제로 검증한다(루트 `README.md`의 "CI에서의 Docker Compose
+  통합 검증" 참고). `next build`(production 빌드)와 standalone 서버
+  (`node .next/standalone/server.js`) 직접 실행은 이 환경에서 확인했다 — 실제
+  Docker 환경에서 한 번은 직접 확인을 권장한다.

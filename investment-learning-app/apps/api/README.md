@@ -14,6 +14,9 @@ uvicorn app.main:app --reload
 ```
 
 `GET /healthz` 로 기동 확인, `GET /docs` 에서 OpenAPI 문서를 확인할 수 있다.
+Docker로 전체 앱(Postgres+API+웹)을 한 번에 띄우는 방법은 루트 `README.md`의
+"빠른 시작 (Docker Compose, 한 번의 명령)"과 아래 "Docker / 배포 준비" 절을
+참고한다.
 
 ## 구조
 
@@ -37,10 +40,70 @@ app/
 │     ├─ coaching.py      # 과정 점수(7.3)·행동편향 탐지(7.4)
 │     └─ ai_coach.py      # AI 코치 파이프라인 (7.5-7.7) — Claude API + 규칙기반 폴백
 ├─ scripts/
-│  └─ ingest_market_data.py  # 수동 시세 수집 CLI (라이브 미검증, README 참고)
+│  ├─ ingest_market_data.py       # 수동 시세 수집 CLI (라이브 미검증, README 참고)
+│  ├─ refresh_demo_market_data.py # 데모 종목 최신 시세 as_of 새로고침
+│  ├─ wait_for_db.py              # DB 연결 대기 (컨테이너 시작 순서 방어)
+│  ├─ docker_entrypoint.sh        # 컨테이너 시작 시퀀스 (DB 대기→migration→시세 새로고침→서버)
+│  └─ smoke_test.py               # 배포 후 핵심 흐름 확인용 smoke test
 └─ workers/            # (미사용) 비동기 작업 placeholder — 실제 체결은 아직 API 요청 안에서 동기 실행
-alembic/                # DB 마이그레이션
+alembic/                # DB 마이그레이션 (학습 콘텐츠·데모 종목 시드 포함)
 ```
+
+## Docker / 배포 준비
+
+`Dockerfile`은 2-스테이지 빌드다: `deps` 스테이지에서 `requirements.txt`(모든
+패키지가 `==`로 고정된 lockfile 역할)로 의존성을 설치하고, `runtime`
+스테이지는 그 결과물과 애플리케이션 코드만 담아 non-root 사용자(`app`)로
+실행한다. `.dockerignore`로 `tests/`, `.venv/`, `.git/` 등 런타임에 불필요한
+파일은 이미지에 들어가지 않는다. 이미지 자체에는 `.env` 등 비밀정보가 담긴
+파일을 `COPY`하지 않으며, 빌드 인자로도 비밀값을 받지 않는다 — 모든 비밀은
+컨테이너 실행 시점에 `env_file`/`environment`로만 주입한다.
+
+컨테이너 시작 시퀀스(`scripts/docker_entrypoint.sh`, `ENTRYPOINT`로 등록):
+
+1. `scripts/wait_for_db.py` — DB에 연결될 때까지 최대 60초 재시도. docker-compose의
+   `depends_on: condition: service_healthy`가 대부분의 순서 문제를 막아주지만,
+   이 스크립트만으로 컨테이너를 단독 실행하는 경우를 대비한 방어적 장치다.
+2. `alembic upgrade head` — 스키마 마이그레이션과 시드 데이터(학습 콘텐츠,
+   데모 종목, 수수료 정책)를 함께 반영한다. 이미 최신이면 아무 것도 하지
+   않는다(멱등) — 재실행해도 콘텐츠·종목이 중복되지 않고 기존 사용자 데이터도
+   보존된다.
+3. `scripts/refresh_demo_market_data.py` — 데모 종목 최신 bar의 `as_of`를
+   현재 시각으로 새로고침한다(가격은 바꾸지 않는다). 이것도 멱등하다.
+4. `uvicorn app.main:app` 시작.
+
+**이 중 어느 단계든 실패하면 스크립트가 `set -e`로 즉시 종료되어 컨테이너가
+"실패"로 표시된다 — migration이나 seed 실패를 조용히 넘기고 애플리케이션이
+잘못된 스키마 위에서 뜨는 일은 없다.**
+
+`HEALTHCHECK`는 이 프로세스 자신의 `/health/live`만 확인한다(DB나 외부
+서비스에 의존하지 않음 — 외부 LLM/시장 데이터 공급자 장애로 컨테이너가
+불필요하게 재시작되면 안 되기 때문이다). docker-compose에서는 다른 서비스가
+"API가 실제로 요청을 처리할 준비가 됐는지" 알아야 하므로 compose 레벨
+healthcheck를 `/health/ready`로 재정의해 사용한다(`../../docker-compose.yml`).
+
+### Health / Readiness 엔드포인트 (`app/api/health.py`)
+
+- `GET /health/live` — 프로세스 liveness만 확인. 어떤 의존성도 확인하지 않는다.
+- `GET /health/ready` — DB 연결 + Alembic 마이그레이션이 최신(head)인지
+  확인한다. **판단 기준은 이 두 가지뿐이다.** 실패하면 503과 함께 짧은
+  `reason` 코드(`database_unavailable` 또는 `migration_pending`)만 반환한다
+  — DB URL, 예외 메시지, 스택트레이스 등은 응답에 절대 포함하지 않는다.
+
+### Smoke test (`scripts/smoke_test.py`)
+
+```bash
+python -m scripts.smoke_test --base-url http://localhost:8000 --origin http://localhost:3000
+```
+
+liveness/readiness → 회원가입 → 로그아웃/로그인(쿠키에 `HttpOnly` 있는지
+확인) → `/v1/auth/me` → 1강 조회 → 퀴즈 제출 → SK하이닉스 검색 → 포트폴리오
+조회 → 거래 전 일지 생성 → 가상 매수 주문 → 포트폴리오 반영 확인 → 로그아웃
+→ 로그아웃 후 보호 API 401 확인, 순서로 검증한다. 매 실행마다 무작위 이메일로
+새로 가입하므로(`smoke-<임의 12자리>@example.com`) 몇 번을 반복 실행해도
+기존 데이터를 훼손하지 않는다. 상태변경 요청에는 `Origin` 헤더가 실려야
+하므로(`--origin`, CSRF 방어) 기본값은 `CORS_ALLOWED_ORIGINS_RAW`의 개발
+기본값과 맞춰 두었다 — 다른 CORS 설정을 쓰면 이 값도 함께 바꿔야 한다.
 
 ## 구현 상태
 

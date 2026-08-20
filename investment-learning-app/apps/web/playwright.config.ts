@@ -1,8 +1,15 @@
 import { defineConfig, devices } from "@playwright/test";
+import fs from "node:fs";
 import path from "node:path";
 
 const WEB_PORT = 3100;
 const API_PORT = 8100;
+
+// 이 저장소를 개발한 샌드박스에는 Chromium이 고정 경로에 미리 설치되어 있어
+// `playwright install`을 건너뛴다. 그 경로가 없는 환경(CI 러너, 다른 개발자
+// PC 등)에서는 Playwright가 관리하는 일반 설치 경로를 그대로 쓴다.
+const SANDBOX_CHROMIUM_PATH = "/opt/pw-browsers/chromium";
+const chromiumExecutablePath = fs.existsSync(SANDBOX_CHROMIUM_PATH) ? SANDBOX_CHROMIUM_PATH : undefined;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -22,7 +29,7 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        launchOptions: { executablePath: "/opt/pw-browsers/chromium" },
+        launchOptions: chromiumExecutablePath ? { executablePath: chromiumExecutablePath } : {},
       },
     },
   ],

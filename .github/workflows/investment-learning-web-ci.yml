@@ -1,0 +1,87 @@
+name: investment-learning-app Web CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/apps/api/**"
+  pull_request:
+    paths:
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/apps/api/**"
+
+jobs:
+  typecheck-lint-build-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: investment-learning-app/apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: investment-learning-app/apps/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npx eslint .
+      - name: Production build
+        run: npm run build
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: investment_learning
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U app -d investment_learning"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install backend dependencies
+        working-directory: investment-learning-app/apps/api
+        run: pip install -r requirements.txt
+      - name: Run DB migrations (E2E fixture DB)
+        working-directory: investment-learning-app/apps/api
+        env:
+          DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/investment_learning
+        run: python -m alembic upgrade head
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: investment-learning-app/apps/web/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: investment-learning-app/apps/web
+        run: npm ci
+      - name: Install Playwright browsers
+        working-directory: investment-learning-app/apps/web
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright E2E
+        working-directory: investment-learning-app/apps/web
+        run: npx playwright test
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: investment-learning-app/apps/web/playwright-report/
+          retention-days: 7

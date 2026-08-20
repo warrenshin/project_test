@@ -1,0 +1,370 @@
+name: investment-learning-app Docker Build & Compose Integration CI
+
+# 세 그룹의 job이 있다.
+#   - build-api-image / build-web-image: production 이미지가 실제로 빌드되고
+#     (non-root 사용자, 올바른 HEALTHCHECK, 불필요한 개발 파일 미포함) 최소
+#     조건을 만족하는지 확인한다.
+#   - compose-integration: 전체 스택을 실제로 docker compose로 기동해 최초
+#     실행, health/readiness, migration·seed 재실행 멱등성, web/api/postgres
+#     재시작 후 데이터 유지, smoke test까지 실제로 검증한다.
+#   - failure-scenarios: 의도된 오류 상황(잘못된 production 쿠키 설정, DB가
+#     늦게 뜨는 경우, migration이 적용되지 않은 DB)에서 안전하게(=조용히
+#     넘어가지 않고) 실패하거나 스스로 복구하는지 별도의 격리된 컨테이너로
+#     확인한다. compose-integration이 사용하는 스택은 건드리지 않는다.
+#
+# 셋 다 어떤 컨테이너 레지스트리에도 이미지를 push하지 않고 어떤 환경에도
+# 배포하지 않는다 — 이 워크플로 실행 안에서만 존재하다가 사라지는
+# 컨테이너다. GitHub repository secret은 전혀 쓰지 않는다 — JWT_SECRET 등은
+# 매 실행마다 무작위로 새로 생성해 로그 마스킹(::add-mask::)에 등록한다
+# (.github/scripts/generate_ci_env.sh). 그래서 secret이 없는 fork PR에서도
+# 안전하게 실행된다(어차피 쓸 secret 자체가 없다).
+#
+# ⚠️ compose-integration/failure-scenarios의 `docker compose down -v`,
+# `docker volume rm`류 명령은 이 워크플로가 만든, 이 GitHub Actions 러너
+# 안에서만 존재하는 격리된 볼륨을 정리하는 것이다. 개발자 로컬 PC나 운영
+# 환경의 데이터 볼륨에는 이런 명령을 실행하면 안 된다 — 로컬에서 데이터를
+# 완전히 지우는 방법은 루트 README.md의 별도 경고 섹션에서만 다룬다.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "investment-learning-app/apps/api/**"
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/docker-compose.yml"
+      - ".github/workflows/investment-learning-docker-build-ci.yml"
+      - ".github/scripts/**"
+  pull_request:
+    paths:
+      - "investment-learning-app/apps/api/**"
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/docker-compose.yml"
+      - ".github/workflows/investment-learning-docker-build-ci.yml"
+      - ".github/scripts/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-api-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API production image
+        run: docker build -t investment-learning-api:ci ./investment-learning-app/apps/api
+
+      - name: Inspect image — non-root user, HEALTHCHECK, no dev artifacts
+        run: |
+          set -euo pipefail
+          user="$(docker inspect investment-learning-api:ci --format '{{.Config.User}}')"
+          if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+            echo "::error::API image has no non-root USER set (got: '${user}')"
+            exit 1
+          fi
+          echo "non-root user OK (${user})"
+
+          healthcheck="$(docker inspect investment-learning-api:ci --format '{{.Config.Healthcheck}}')"
+          case "$healthcheck" in
+            *health/live*) echo "HEALTHCHECK targets /health/live OK" ;;
+            *) echo "::error::HEALTHCHECK missing or does not target /health/live: ${healthcheck}"; exit 1 ;;
+          esac
+
+          docker run --rm --entrypoint sh investment-learning-api:ci -c '
+            set -e
+            for p in .env .git tests __pycache__; do
+              if [ -e "$p" ]; then
+                echo "unexpected path found in image: $p"
+                exit 1
+              fi
+            done
+            echo "no .env / .git / tests / __pycache__ in image"
+          '
+
+  build-web-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Web production image
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 \
+            -t investment-learning-web:ci \
+            ./investment-learning-app/apps/web
+
+      - name: Inspect image — non-root user, HEALTHCHECK, no dev artifacts
+        run: |
+          set -euo pipefail
+          user="$(docker inspect investment-learning-web:ci --format '{{.Config.User}}')"
+          if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+            echo "::error::Web image has no non-root USER set (got: '${user}')"
+            exit 1
+          fi
+          echo "non-root user OK (${user})"
+
+          healthcheck="$(docker inspect investment-learning-web:ci --format '{{.Config.Healthcheck}}')"
+          case "$healthcheck" in
+            *api/health*) echo "HEALTHCHECK targets /api/health OK" ;;
+            *) echo "::error::HEALTHCHECK missing or does not target /api/health: ${healthcheck}"; exit 1 ;;
+          esac
+
+          docker run --rm --entrypoint sh investment-learning-web:ci -c '
+            set -e
+            for p in .env .git e2e .next/cache; do
+              if [ -e "$p" ]; then
+                echo "unexpected path found in image: $p"
+                exit 1
+              fi
+            done
+            echo "no .env / .git / e2e / .next cache in image"
+          '
+
+  compose-integration:
+    needs: [build-api-image, build-web-image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: investment-learning-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Python client deps for smoke/persistence scripts
+        run: pip install httpx
+
+      - name: docker / docker compose 버전 확인
+        run: |
+          docker version
+          docker compose version
+
+      - name: CI 전용 임시 .env 생성 (커밋되지 않고, artifact로도 업로드되지 않음)
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/generate_ci_env.sh"
+
+      - name: docker compose config (민감값은 위에서 마스킹됨)
+        run: docker compose config
+
+      - name: docker compose build --no-cache
+        run: docker compose build --no-cache
+
+      - name: docker compose up -d (빈 volume에서 최초 실행)
+        run: docker compose up -d
+
+      - name: postgres/api 컨테이너 healthy 대기
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" postgres 120
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" api 180
+
+      - name: API/Web health 엔드포인트 확인
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:8000/health/live "API /health/live" 60
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:8000/health/ready "API /health/ready" 60
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:3000/api/health "Web /api/health" 120
+
+      - name: 최초 실행 시드 데이터 확인 (1~5강, 데모 종목)
+        run: |
+          set -euo pipefail
+          docker compose exec -T api python -m scripts.count_seed_rows | tee /tmp/seed-counts-before.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/seed-counts-before.json'))
+          assert d['lessons'] == 5, f'lessons expected 5, got {d}'
+          assert d['instruments'] >= 4, f'instruments expected >=4, got {d}'
+          print('시드 확인 OK: lessons=5, instruments>=4')
+          "
+
+      - name: Smoke test (최초 실행)
+        run: python3 apps/api/scripts/smoke_test.py --base-url http://localhost:8000 --origin http://localhost:3000
+
+      - name: 재실행 멱등성 검증 (migration/seed 재실행 후 행 수 비교)
+        run: |
+          set -euo pipefail
+          docker compose exec -T api alembic upgrade head
+          docker compose exec -T api python -m scripts.refresh_demo_market_data
+          docker compose exec -T api python -m scripts.count_seed_rows | tee /tmp/seed-counts-after.json
+          if ! diff -q /tmp/seed-counts-before.json /tmp/seed-counts-after.json >/dev/null; then
+            echo "::error::migration/seed 재실행 후 행 수가 달라졌다 (중복 생성 의심)"
+            diff /tmp/seed-counts-before.json /tmp/seed-counts-after.json || true
+            exit 1
+          fi
+          echo "멱등성 확인 OK: 재실행 전후 행 수 동일"
+
+      - name: 재실행 후 API/Web 정상 동작 + smoke test 재확인
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:8000/health/ready "API /health/ready" 30
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:3000/api/health "Web /api/health" 30
+          python3 apps/api/scripts/smoke_test.py --base-url http://localhost:8000 --origin http://localhost:3000
+
+      - name: 재시작 전 — 지속성 테스트용 사용자·투자일지 생성
+        run: |
+          python3 apps/api/scripts/restart_persistence_test.py --phase setup \
+            --state-file /tmp/restart-persistence-state.json \
+            --base-url http://localhost:8000 --origin http://localhost:3000
+
+      - name: web 컨테이너 재시작 후 health 재확인
+        run: |
+          docker compose restart web
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:3000/api/health "Web /api/health (재시작 후)" 60
+
+      - name: api 컨테이너 재시작 후 health 재확인
+        run: |
+          docker compose restart api
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" api 120
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:8000/health/ready "API /health/ready (재시작 후)" 60
+
+      - name: postgres 컨테이너 재시작 후 health 재확인
+        run: |
+          docker compose restart postgres
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" postgres 120
+          # postgres가 재시작되며 API의 기존 커넥션이 끊겼다 다시 붙는지도 함께 확인한다
+          # (SQLAlchemy pool_pre_ping=True, app/core/db.py).
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:8000/health/ready "API /health/ready (postgres 재시작 후)" 90
+
+      - name: 재시작 후 — 데이터 유지 검증 (volume 유지 확인)
+        run: |
+          python3 apps/api/scripts/restart_persistence_test.py --phase verify \
+            --state-file /tmp/restart-persistence-state.json \
+            --base-url http://localhost:8000 --origin http://localhost:3000
+
+      - name: 최종 container 상태 확인
+        if: always()
+        run: docker compose ps
+
+      - name: 실패 시 증거 로그 출력 (민감정보 제외 — cookie/token/password/DB URL 미노출)
+        if: failure()
+        run: |
+          echo "--- docker compose ps ---"
+          docker compose ps || true
+          echo "--- api 최근 로그 (200줄) ---"
+          docker compose logs --tail=200 api || true
+          echo "--- web 최근 로그 (200줄) ---"
+          docker compose logs --tail=200 web || true
+          echo "--- postgres 최근 로그 (100줄) ---"
+          docker compose logs --tail=100 postgres || true
+          echo "--- health 엔드포인트 상태 ---"
+          curl -fsS http://localhost:8000/health/live || echo "API /health/live 실패"
+          curl -fsS http://localhost:8000/health/ready || echo "API /health/ready 실패"
+          curl -fsS http://localhost:3000/api/health || echo "Web /api/health 실패"
+
+      - name: Cleanup — docker compose down -v
+        # ⚠️ 이 GitHub Actions 러너 위 격리된 볼륨 전용. 로컬/운영 데이터에는 사용 금지.
+        if: always()
+        run: docker compose down -v
+
+  failure-scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: investment-learning-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: API 이미지 빌드 (이 job은 별도 러너라 build-api-image의 이미지를 공유하지 않음)
+        run: docker build -t investment-learning-api:ci ./apps/api
+
+      - name: "장애 시나리오 1: 잘못된 production 쿠키 설정은 설정 검증 단계에서 즉시 실패한다"
+        run: |
+          set +e
+          docker run --rm \
+            -e ENVIRONMENT=production \
+            -e COOKIE_SECURE=false \
+            -e JWT_SECRET="$(openssl rand -hex 32)" \
+            -e DATABASE_URL="postgresql+psycopg://app:app@localhost:5432/investment_learning" \
+            --entrypoint python \
+            investment-learning-api:ci \
+            -c "from app.core.config import get_settings; get_settings()"
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "::error::ENVIRONMENT=production + COOKIE_SECURE=false 조합이 설정 검증을 통과했다 (실패해야 정상)"
+            exit 1
+          fi
+          echo "예상대로 설정 검증 단계에서 실패함 (exit code ${code}) — production 안전장치 정상 동작"
+
+      - name: "장애 시나리오 2: DB가 늦게 떠도 API가 대기 후 정상화된다"
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/.github/scripts/generate_ci_env.sh"
+          # --no-deps로 compose의 자동 의존성 기동을 건너뛴다 — postgres 없이 api만 먼저 띄운다.
+          docker compose up -d --no-deps api
+          echo "postgres 없이 api를 먼저 띄웠다 — wait_for_db가 재시도하는 동안 5초 대기"
+          sleep 5
+          docker compose ps api || true
+          echo "이제 postgres를 띄운다"
+          docker compose up -d postgres
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" postgres 120
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" api 120
+          echo "DB가 나중에 떠도 API가 대기 후 정상화됨을 확인했다"
+          docker compose down -v
+
+      - name: "장애 시나리오 3: migration이 적용되지 않은 DB는 /health/ready가 not-ready를 반환한다"
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-unmigrated-db --network host \
+            -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=investment_learning \
+            --health-cmd "pg_isready -U app -d investment_learning" \
+            --health-interval 3s --health-timeout 3s --health-retries 20 \
+            postgres:16-alpine
+
+          waited=0
+          until [ "$(docker inspect -f '{{.State.Health.Status}}' ci-unmigrated-db 2>/dev/null)" = "healthy" ]; do
+            if [ "$waited" -ge 60 ]; then
+              echo "::error::ci-unmigrated-db not healthy in time"
+              docker logs ci-unmigrated-db
+              exit 1
+            fi
+            sleep 2; waited=$((waited + 2))
+          done
+
+          # migration 파일 자체는 손대지 않는다 — 그냥 실제 migration을 실행하지 않고
+          # alembic_version만 오래된 리비전으로 직접 채워 "migration 미적용" 상태를
+          # 안전하게 흉내낸다.
+          docker exec ci-unmigrated-db psql -U app -d investment_learning -c \
+            "CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL); INSERT INTO alembic_version VALUES ('0000000000');"
+
+          # entrypoint(migration 실행)를 우회하고 uvicorn을 직접 띄워, 방금 만든
+          # "migration 미적용" DB에 대고 /health/ready가 어떻게 반응하는지만 본다.
+          docker run -d --name ci-unmigrated-api --network host \
+            -e DATABASE_URL="postgresql+psycopg://app:app@localhost:5432/investment_learning" \
+            -e JWT_SECRET="$(openssl rand -hex 32)" \
+            -e ENVIRONMENT=development \
+            -e COOKIE_SECURE=false \
+            -e CORS_ALLOWED_ORIGINS_RAW=http://localhost:3000 \
+            --entrypoint uvicorn \
+            investment-learning-api:ci \
+            app.main:app --host 0.0.0.0 --port 8000
+
+          waited=0
+          until curl -fsS http://localhost:8000/health/live >/dev/null 2>&1; do
+            if [ "$waited" -ge 60 ]; then
+              echo "::error::ci-unmigrated-api did not come up in time"
+              docker logs ci-unmigrated-api
+              exit 1
+            fi
+            sleep 2; waited=$((waited + 2))
+          done
+
+          status_code="$(curl -s -o /tmp/ready-resp.json -w '%{http_code}' http://localhost:8000/health/ready)"
+          echo "response: $(cat /tmp/ready-resp.json)"
+          if [ "$status_code" != "503" ]; then
+            echo "::error::migration이 적용되지 않은 DB인데 /health/ready가 503이 아니다 (got ${status_code})"
+            exit 1
+          fi
+          echo "예상대로 /health/ready가 503(not ready)을 반환함을 확인했다"
+
+      - name: Cleanup 격리된 임시 컨테이너
+        # ⚠️ 이 job이 만든, 이 GitHub Actions 러너 안에서만 존재하는 컨테이너 전용 정리.
+        if: always()
+        run: |
+          docker rm -f ci-unmigrated-api ci-unmigrated-db 2>/dev/null || true
+          docker compose down -v 2>/dev/null || true

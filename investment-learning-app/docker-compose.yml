@@ -1,0 +1,80 @@
+# 로컬/스테이징에서 전체 앱을 한 번에 띄우기 위한 구성이다.
+#
+#   cp .env.example .env   # 최초 1회 — 값을 확인/수정한다
+#   docker compose up --build
+#
+# 시작 순서: postgres(healthy) -> api(migration+seed 실행 후 /health/ready
+# healthy) -> web. redis는 현재 애플리케이션 코드가 실제로 사용하지 않는
+# 예약된 의존성이라(app/core/config.py의 redis_url 참고, 캐싱/레이트리밋 등
+# 향후 용도) 시작 순서에서 다른 서비스를 막지 않는다.
+#
+# api 서비스는 .env 파일(이 파일과 같은 디렉터리)이 반드시 있어야 한다 —
+# 없으면 "env file ... not found"로 즉시, 명확하게 실패한다(조용히 안전하지
+# 않은 기본값으로 기동하지 않는다).
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-investment_learning}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-investment_learning}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./apps/api
+    env_file:
+      - .env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3).status == 200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

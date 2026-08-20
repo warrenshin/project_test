@@ -78,14 +78,51 @@ investment-learning-app/
 
 세부 내용은 `docs/product-spec.md`의 16장을 참고한다.
 
-## 로컬 개발 시작
+## 빠른 시작 (Docker Compose, 한 번의 명령)
+
+가장 빠르게 전체 앱(Postgres + API + 웹)을 띄우는 방법이다. Docker와 Docker
+Compose만 있으면 된다.
+
+1. 저장소를 clone한다.
+2. `investment-learning-app` 디렉터리로 이동한다.
+   ```bash
+   cd investment-learning-app
+   ```
+3. `.env.example`을 참고해 로컬 `.env`를 준비한다 (`.env`는 git에 커밋하지
+   않는다).
+   ```bash
+   cp .env.example .env
+   ```
+4. 전체 앱을 빌드하고 실행한다.
+   ```bash
+   docker compose up --build
+   ```
+5. 브라우저에서 접속한다.
+   - 프런트엔드: http://localhost:3000
+   - 백엔드 API: http://localhost:8000 (예: http://localhost:8000/health/live)
+6. 종료하려면 터미널에서 `Ctrl+C`를 누르거나, 별도 터미널에서
+   `docker compose down`을 실행한다.
+7. `docker compose down`은 컨테이너만 제거하고 데이터는 남는다 — PostgreSQL
+   데이터는 named volume(`postgres_data`)에 저장되므로 재실행(`docker compose
+   up`)해도 회원가입한 계정·일지·포트폴리오가 유지된다. 데이터까지 완전히
+   지우려면 `docker compose down -v`를 명시적으로 실행해야 한다(자동으로
+   지워지지 않는다).
+
+시작 순서는 `postgres`(healthy) → `api`(마이그레이션+시드 적용 후
+`/health/ready`가 healthy가 될 때까지 대기) → `web` 순이다. 이 순서와 각
+컨테이너 구성의 자세한 내용은 `apps/api/README.md`의 "Docker / 배포 준비"
+절을 참고한다.
+
+### 개발모드 실행 (Docker 없이)
+
+Docker 없이 각 서버를 직접(hot-reload와 함께) 띄우고 싶을 때 쓴다.
 
 백엔드:
 
 ```bash
 cd apps/api
 cp .env.example .env
-docker compose -f ../../infra/docker/docker-compose.yml up -d   # Postgres, Redis
+docker compose -f ../../infra/docker/docker-compose.yml up -d   # Postgres, Redis (앱 컨테이너는 아님)
 pip install -r requirements.txt
 alembic upgrade head
 uvicorn app.main:app --reload
@@ -101,6 +138,185 @@ npm run dev   # http://localhost:3000
 
 두 서버를 함께 실행하는 방법, 데모 시세 새로고침(오래된 시세로 주문이 막힐 때),
 Playwright E2E 테스트 실행 방법은 `apps/web/README.md`를 참고한다.
+
+### Production-like 실행 (Docker 없이)
+
+배포와 동일한 production 빌드 방식을 Docker 없이 직접 확인하고 싶을 때 쓴다
+(`next dev`/`uvicorn --reload`가 아니라 실제 production 서버 프로세스로 뜬다).
+
+```bash
+# 백엔드
+cd apps/api
+ENVIRONMENT=development alembic upgrade head
+ENVIRONMENT=development uvicorn app.main:app --host 0.0.0.0 --port 8000   # --reload 없음
+
+# 프런트엔드 (별도 터미널)
+cd apps/web
+npm run build   # next build — production 빌드
+npm run start   # next start — production 서버
+```
+
+### Health / Readiness
+
+- `GET /health/live` — 프로세스가 살아 있는지만 확인한다. DB나 외부 서비스에
+  의존하지 않는다 — 외부 LLM(Claude API)이나 시장 데이터 공급자가 일시적으로
+  응답하지 않아도 이 값은 계속 200을 반환해야 한다(그런 이유로 컨테이너가
+  재시작되면 안 되므로).
+- `GET /health/ready` — 실제 요청을 처리할 준비가 됐는지 확인한다: DB에
+  연결할 수 있는지, Alembic 마이그레이션이 최신(head)까지 적용됐는지를 본다.
+  **readiness 판단 기준은 정확히 이 두 가지뿐이다.** 둘 중 하나라도 아니면
+  503을 반환한다. 응답에는 DB URL·내부 오류 메시지·스택트레이스 등 민감한
+  정보를 절대 포함하지 않는다.
+- 프런트엔드는 `GET /api/health`(Next.js 자체 라우트)로 서버 프로세스
+  liveness만 확인한다.
+
+### Migration과 seed
+
+- Alembic 마이그레이션(`apps/api/alembic/versions/`)에 학습 콘텐츠(1~5강),
+  퀴즈, 데모 종목 4개(삼성전자/SK하이닉스/AAPL/MSFT), 수수료 정책 시드가 함께
+  들어 있다 — 별도 seed 스크립트가 아니라 `alembic upgrade head` 한 번으로
+  스키마와 초기 데이터가 함께 반영된다.
+- 이미 최신 상태인 DB에 다시 `alembic upgrade head`를 실행해도 안전하다 —
+  Alembic이 DB에 저장된 현재 리비전을 보고 이미 적용된 마이그레이션은
+  건너뛰므로, 콘텐츠나 종목이 중복 생성되지 않는다. 기존 사용자·일지·
+  포트폴리오 데이터도 그대로 유지된다.
+- Docker 컨테이너는 시작할 때마다 데모 종목의 최신 시세 `as_of`를 현재
+  시각으로 새로고침한다(`scripts/refresh_demo_market_data.py`) — 가격 자체나
+  종목 수를 바꾸지 않고 타임스탬프만 갱신하므로 몇 번을 재실행해도 안전하다.
+- migration이나 seed가 실패하면 컨테이너 자체가 실패로 종료된다(`apps/api/
+  scripts/docker_entrypoint.sh`가 `set -e`로 동작) — 조용히 넘어가 애플리케이션이
+  잘못된 스키마로 뜨는 일은 없다.
+- production 환경에서 이 과정이 임의의 테스트 사용자 계정을 만들지는 않는다
+  — 시드되는 것은 학습 콘텐츠·종목·수수료 정책뿐이다.
+
+### Smoke test
+
+배포된 인스턴스(로컬이든 docker-compose든)에 대해 핵심 흐름이 실제로
+동작하는지 빠르게 확인한다.
+
+```bash
+cd apps/api
+python -m scripts.smoke_test --base-url http://localhost:8000 --origin http://localhost:3000
+```
+
+liveness/readiness, 회원가입, 로그인(쿠키 설정 확인), `/v1/auth/me`, 1강 조회,
+퀴즈 제출, SK하이닉스 검색, 거래 전 일지 생성, 가상 매수 주문, 포트폴리오
+반영, 로그아웃, 로그아웃 후 보호 API 401을 순서대로 확인한다. 매 실행마다
+무작위 이메일로 새로 가입하므로 몇 번을 실행해도 기존 데이터를 훼손하지
+않는다.
+
+### 전체 테스트
+
+```bash
+# 백엔드
+cd apps/api && pytest -q
+
+# 프런트엔드
+cd apps/web
+npx tsc --noEmit
+npx eslint .
+npm run build
+npx playwright test
+npm audit
+```
+
+### 로그 확인
+
+```bash
+docker compose logs -f            # 전체
+docker compose logs -f api        # 백엔드만
+docker compose logs -f web        # 프런트엔드만
+docker compose logs -f postgres   # DB만
+```
+
+### CI에서의 Docker Compose 통합 검증
+
+이 저장소를 개발한 샌드박스는 Docker 데몬을 구동할 수 없는 제한된 환경이라
+(아래 "알려진 제한사항" 참고), 실제 Docker 실행 검증은 GitHub Actions의
+Ubuntu runner에서 수행한다(`.github/workflows/investment-learning-docker-build-ci.yml`).
+이 워크플로는 `investment-learning-app/apps/api/**`, `apps/web/**`,
+`docker-compose.yml`이 바뀐 PR/`main` push에서 실행되며 다음을 실제로
+확인한다:
+
+- API/Web production 이미지 빌드, non-root 사용자, 올바른 HEALTHCHECK,
+  이미지에 `.env`/`.git`/테스트/Python 캐시가 없는지(`build-*-image` job).
+- 빈 volume에서 `docker compose build --no-cache` → `docker compose up -d`로
+  최초 실행, `/health/live`·`/health/ready`·Web `/api/health` 확인, 1~5강·
+  데모 종목 시드 확인, smoke test(`compose-integration` job).
+- migration/seed를 컨테이너가 뜬 상태에서 다시 실행해도 행 수가 늘지 않는지
+  (멱등성 검증).
+- web → api → postgres 순서로 각각 재시작한 뒤 health가 다시 정상화되는지,
+  재시작 전 만든 테스트 사용자·투자일지가 재시작 후에도 그대로 남아 있는지
+  (`scripts/restart_persistence_test.py`로 검증 — 운영 데이터를 지우는 기능은
+  없다).
+- 잘못된 production 쿠키 설정, DB가 늦게 뜨는 상황, migration이 적용되지
+  않은 DB에서 각각 안전하게 반응하는지(`failure-scenarios` job, 격리된
+  임시 컨테이너만 사용 — 위 통합 테스트 스택은 건드리지 않는다).
+
+CI는 GitHub repository secret 없이도 동작한다 — `JWT_SECRET` 등은 매 실행마다
+무작위로 새로 생성해 로그에 마스킹 처리한다(`.github/scripts/generate_ci_env.sh`).
+어떤 job도 컨테이너 레지스트리에 이미지를 push하거나 외부 환경에 배포하지
+않는다. 실행 결과는 저장소의 Actions 탭에서 이 워크플로 이름으로 확인할 수
+있다.
+
+### 로컬 Docker Desktop / WSL2에서 실행하기
+
+위 "빠른 시작"과 동일한 명령이지만, 최초 실행은 base 이미지 다운로드와
+`npm ci`/`pip install`을 새로 하기 때문에 몇 분 정도 걸릴 수 있다(이후
+재실행은 Docker 레이어 캐시 덕분에 훨씬 빠르다):
+
+```bash
+cd investment-learning-app
+cp .env.example .env
+docker compose up --build
+```
+
+- **health 확인**: `curl http://localhost:8000/health/live`,
+  `curl http://localhost:8000/health/ready`, `curl http://localhost:3000/api/health`.
+  또는 `docker compose ps`로 각 컨테이너의 `STATUS` 열에 `(healthy)`가
+  붙는지 확인한다.
+- **로그 확인**: 위 "로그 확인" 절의 `docker compose logs -f [서비스명]`.
+- **데이터 유지 확인**: 회원가입 후 `docker compose restart api` (또는
+  `web`/`postgres`)를 실행하고, health가 다시 정상화된 뒤 같은 계정으로
+  다시 로그인해 데이터가 남아 있는지 확인한다. 자동화된 버전은
+  `apps/api/scripts/restart_persistence_test.py` 참고(운영 데이터를 지우는
+  기능은 없다 — 새 테스트 계정을 만들고 조회만 한다).
+
+#### ⚠️ 로컬 데이터 volume 완전 삭제 (주의 — 되돌릴 수 없음)
+
+`docker compose down`은 컨테이너만 정리하고 PostgreSQL 데이터는 named
+volume(`postgres_data`)에 그대로 남는다. **아래 명령은 그 volume까지
+영구적으로 삭제한다 — 회원가입한 모든 계정, 투자일지, 포트폴리오 데이터가
+전부 사라지며 되돌릴 수 없다.** 로컬에서 완전히 새로 시작하고 싶을 때만,
+정말로 필요한 경우에만 실행한다:
+
+```bash
+docker compose down -v
+```
+
+CI 워크플로도 매 실행 끝에 이 명령을 쓰지만, 그건 CI 러너 안에서만 존재하는
+격리된 볼륨이라 안전하다 — **로컬 개발 환경이나 운영 환경에서는 이 명령이
+실제 데이터를 지운다는 점을 항상 염두에 둘 것.**
+
+### 알려진 제한사항 (이번 staging 준비 범위)
+
+- 이 저장소를 개발한 샌드박스는 Docker 데몬을 실제로 구동할 수 없는 제한된
+  컨테이너 환경이라(중첩 컨테이너 미지원), `docker compose up --build`를 이
+  환경(개발 세션의 샌드박스)에서 직접 실행해 검증하지는 못했다. 대신 위
+  "CI에서의 Docker Compose 통합 검증" 절에서 설명한 GitHub Actions 워크플로가
+  실제 Docker 데몬이 있는 Ubuntu runner에서 최초 실행·health·멱등성·재시작 후
+  데이터 유지·장애 시나리오까지 실제로 검증한다 — 그 실행 결과는 PR의 Checks
+  탭에서 확인할 수 있다. 이 세션에서는 Dockerfile·docker-compose.yml·
+  헬스체크·entrypoint 스크립트를 코드 검토와 (가능한 범위의) 개별 요소
+  검증(예: `docker compose config`로 구성 유효성 확인, Next.js standalone
+  서버를 Docker 밖에서 직접 실행해 정상 동작 확인)으로 보강했다 — CI 실행
+  결과가 이 항목의 실질적인 검증 결과다.
+- 라이브 시장 데이터 공급자 연동과 실제 Anthropic API 연결은 이번 범위에서도
+  다루지 않는다 — `ANTHROPIC_API_KEY`를 비워두면 규칙 기반 AI 코칭 폴백
+  경로로 동작한다.
+- 이 앱은 **실제 자금을 입금·보관·운용하지 않고 실제 증권 주문을 접수·
+  중개하지 않는 모의투자(가상자금) 학습 앱**이다 — 모든 화면의 금액과 손익은
+  가상자금 기준이다.
 
 ## 현재 진행 상태
 
@@ -142,3 +358,17 @@ Playwright E2E 테스트 실행 방법은 `apps/web/README.md`를 참고한다.
       refresh-token 회전·재사용 탐지는 기존 로직을 그대로 유지했다. 자세한 쿠키
       정책·CSRF 근거는 `apps/api/README.md`, 프런트엔드 변경사항은
       `apps/web/README.md` 참고.
+- [x] Staging release 준비: `docker compose up --build` 한 번으로 Postgres·API·
+      웹을 함께 띄울 수 있게 했다 — API/Web production Dockerfile(multi-stage,
+      non-root, healthcheck), migration+시드+데모 시세 새로고침을 순서대로
+      실행하고 실패 시 조용히 넘어가지 않는 API entrypoint 스크립트,
+      `/health/live`·`/health/ready` 엔드포인트, 반복 실행해도 안전한 smoke
+      test 스크립트(`apps/api/scripts/smoke_test.py`), 프런트엔드 CI와 Docker
+      이미지 빌드 CI를 새로 추가했다. **단, 이 개발 세션의 샌드박스가 Docker
+      데몬을 실제로 구동할 수 없어(중첩 컨테이너 미지원) `docker compose up
+      --build` 자체는 이 환경에서 실행해 검증하지 못했다** — 구성 유효성
+      (`docker compose config`)과 Docker 밖에서의 개별 요소(Next.js standalone
+      프로덕션 서버 등) 동작은 확인했다. 실제 Docker 환경에서 최초 실행 시
+      한 번은 직접 확인을 권장한다(`apps/api/README.md`, `apps/web/README.md`
+      참고). 범위 밖: 외부 클라우드 실배포, 라이브 시장 데이터·실제 LLM
+      연동, 유료 리소스.

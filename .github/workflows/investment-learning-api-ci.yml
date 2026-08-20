@@ -45,5 +45,9 @@ jobs:
         run: python -c "from app.main import app; print(len(app.routes), 'routes registered')"
       - name: Run DB migrations
         run: python -m alembic upgrade head
+      - name: Verify migration downgrade/upgrade round-trip
+        run: |
+          python -m alembic downgrade base
+          python -m alembic upgrade head
       - name: Run tests
         run: pytest -q
