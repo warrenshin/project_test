@@ -15,7 +15,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session as DbSession
 
-from app.domain.constants import PRICE_STATUS_UNAVAILABLE
+from app.domain.constants import BAR_INTERVAL_DAILY, PRICE_STATUS_UNAVAILABLE
 from app.domain.services.execution import get_latest_bar
 from app.domain.services.market_data import classify_price_freshness
 
@@ -34,11 +34,19 @@ class PricePoint:
 
 
 def get_price_point(db: DbSession, instrument_id: UUID, staleness_threshold_seconds: int) -> PricePoint:
-    bar = get_latest_bar(db, instrument_id)
+    # 포트폴리오 평가도 주문 체결 경로와 동일하게 일봉만 명시적으로 사용한다 —
+    # 두 경로가 서로 다른 interval을 암묵적으로 쓰게 되는 것을 막는다.
+    bar = get_latest_bar(db, instrument_id, interval=BAR_INTERVAL_DAILY)
     if bar is None:
         return PricePoint(price=None, source=None, as_of=None, delay_seconds=None, status=PRICE_STATUS_UNAVAILABLE)
 
-    status = classify_price_freshness(bar.as_of, staleness_threshold_seconds)
+    try:
+        status = classify_price_freshness(bar.as_of, staleness_threshold_seconds)
+    except ValueError:
+        # as_of가 미래 시각이거나 timezone-naive면 신뢰할 수 없는 시세다 —
+        # bar가 아예 없을 때(UNAVAILABLE)와 동일하게 취급한다. 못 믿을 시각을
+        # FRESH로 계산해 평가금액에 반영하는 것보다 안전하다.
+        return PricePoint(price=None, source=None, as_of=None, delay_seconds=None, status=PRICE_STATUS_UNAVAILABLE)
 
     return PricePoint(
         price=Decimal(bar.close),

@@ -147,6 +147,8 @@ export interface PortfolioResponse {
   market_data_status: PortfolioMarketDataStatus;
   market_data_as_of: string | null;
   has_unavailable_positions: boolean;
+  stale_position_count: number;
+  unavailable_position_count: number;
 }
 
 export interface PositionResponse {
@@ -159,6 +161,8 @@ export interface PositionResponse {
   unrealized_pnl: string | null;
   price_status: PriceStatus;
   price_as_of: string | null;
+  price_source: string | null;
+  price_age_seconds: number | null;
 }
 
 export interface PerformanceResponse {
@@ -175,6 +179,8 @@ export interface PerformanceResponse {
   market_data_status: PortfolioMarketDataStatus;
   market_data_as_of: string | null;
   has_unavailable_positions: boolean;
+  stale_position_count: number;
+  unavailable_position_count: number;
   performance_complete: boolean;
   note: string;
 }

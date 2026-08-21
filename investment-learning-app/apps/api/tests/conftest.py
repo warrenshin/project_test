@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.domain.market import Bar, Instrument
+from app.domain.services.market_data import upsert_instrument
 from app.main import app
 
 settings = get_settings()
@@ -38,11 +39,14 @@ def seed_instrument_with_bar(
     as_of: datetime | None = None,
 ) -> Instrument:
     """as_of를 명시하면 그 시각의 bar를 만든다 — 오래된(stale) 시세 시나리오를
-    테스트할 때 쓴다(예: `datetime.now(timezone.utc) - timedelta(hours=1)`)."""
-    instrument = Instrument(
-        ticker=ticker, exchange=exchange, currency=currency, name=ticker, is_tradable=True
-    )
-    db.add(instrument)
+    테스트할 때 쓴다(예: `datetime.now(timezone.utc) - timedelta(hours=1)`).
+
+    upsert_instrument를 통해 만든다(직접 Instrument(...)를 생성하지 않는다) —
+    같은 (ticker, exchange)로 이미 활성 종목이 있으면(예: 다른 테스트가 먼저
+    만든 경우) 새로 만들지 않고 그 종목을 재사용한다. instruments에는
+    (exchange, ticker) partial unique index가 있어, 매번 새로 INSERT하면
+    두 번째 호출부터 제약 위반으로 실패한다."""
+    instrument = upsert_instrument(db, ticker, exchange, currency, name=ticker)
     db.flush()
 
     now = datetime.now(timezone.utc)

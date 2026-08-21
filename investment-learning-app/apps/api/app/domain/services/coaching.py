@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.config import get_settings
+from app.domain.constants import BAR_INTERVAL_DAILY
 from app.domain.journal import JournalEntry
 from app.domain.market import Instrument
 from app.domain.portfolio import Fill, Order, Portfolio, Position
@@ -175,7 +176,7 @@ def detect_biases(db: DbSession, user_id: UUID) -> list[dict]:
         position_values: dict[str, Decimal] = {}
         for position in positions:
             instrument = db.query(Instrument).filter(Instrument.id == position.instrument_id).first()
-            bar = execution.get_latest_bar(db, position.instrument_id)
+            bar = execution.get_latest_bar(db, position.instrument_id, interval=BAR_INTERVAL_DAILY)
             if instrument is None or bar is None:
                 continue
             fx_rate = execution.get_fx_mid_rate(db, instrument.currency, portfolio.base_currency)

@@ -21,6 +21,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session as DbSession
 
 from app.core.config import get_settings
+from app.domain.constants import BAR_INTERVAL_DAILY
 from app.domain.journal import JournalEntry
 from app.domain.learning import CONTENT_PUBLISHED, Lesson
 from app.domain.market import Instrument
@@ -135,7 +136,7 @@ def _build_quant_context(db: DbSession, user_id: UUID, journal: JournalEntry | N
 
         instrument = db.query(Instrument).filter(Instrument.id == journal.instrument_id).first()
         if instrument is not None:
-            bar = execution.get_latest_bar(db, instrument.id)
+            bar = execution.get_latest_bar(db, instrument.id, interval=BAR_INTERVAL_DAILY)
             if bar is not None:
                 lines.append(
                     f"{instrument.ticker}({instrument.name}) 최근가: {bar.close} {instrument.currency}, "

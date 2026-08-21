@@ -10,7 +10,10 @@ def _idem_headers() -> dict:
 
 def test_market_buy_cash_invariant_matches_preview(db):
     token, portfolio_id = signup_user("buyer")
-    instrument = seed_instrument_with_bar(db, "005930", "KRX", "KRW", close=50_000)
+    # 실제 시드 티커(005930/삼성전자)를 재사용하지 않는다 — upsert_instrument는
+    # 활성 종목을 찾으면 이름을 그대로 갱신하므로, 실제 시드 종목명을 테스트가
+    # 조용히 덮어써 버릴 수 있다. 항상 테스트 전용 티커를 쓴다.
+    instrument = seed_instrument_with_bar(db, "TESTBUY1", "KRX", "KRW", close=50_000)
 
     order_payload = {
         "instrument_id": str(instrument.id),
@@ -47,7 +50,11 @@ def test_market_buy_cash_invariant_matches_preview(db):
 
 def test_market_sell_increases_cash_and_realizes_pnl(db):
     token, portfolio_id = signup_user("seller")
-    instrument = seed_instrument_with_bar(db, "000660", "KRX", "KRW", close=100_000)
+    # 실제 시드 데이터의 티커(예: 000660/SK하이닉스)를 재사용하지 않는다 —
+    # upsert_instrument는 활성 종목을 찾으면 이름을 그대로 갱신하므로, 실제
+    # 시드 종목명을 테스트가 조용히 덮어써 버릴 수 있다(E2E 테스트가 그 이름에
+    # 의존한다). 항상 테스트 전용 티커를 쓴다.
+    instrument = seed_instrument_with_bar(db, "TESTSELL1", "KRX", "KRW", close=100_000)
     cookies = token
 
     buy_payload = {
@@ -194,7 +201,8 @@ def test_limit_order_not_immediately_fillable_stays_accepted_then_cancellable(db
 
 def test_cross_currency_buy_uses_seeded_fx_rate(db):
     token, portfolio_id = signup_user("usbuyer")
-    instrument = seed_instrument_with_bar(db, "AAPL", "NASDAQ", "USD", close=200)
+    # 실제 시드 티커(AAPL/Apple Inc.)를 재사용하지 않는다 — 위 사유와 동일.
+    instrument = seed_instrument_with_bar(db, "TESTUSBUY1", "NASDAQ", "USD", close=200)
     cookies = token
 
     order_payload = {
@@ -214,3 +222,27 @@ def test_cross_currency_buy_uses_seeded_fx_rate(db):
     )
     assert order_res.status_code == 201
     assert order_res.json()["status"] == "FILLED"
+
+
+def test_fill_records_market_data_source_used_for_the_price(db):
+    """감사(audit) 요구사항: 체결가가 어느 시세 출처에서 왔는지 Fill에 남아야
+    한다 — market_data_as_of는 있었지만 market_data_source가 없었던 기존 gap."""
+    from app.domain.portfolio import Fill, Order
+
+    token, portfolio_id = signup_user("fillsource")
+    instrument = seed_instrument_with_bar(db, "TESTFILLSRC", "NASDAQ", "USD", close=100)
+
+    order_payload = {
+        "instrument_id": str(instrument.id),
+        "side": "BUY",
+        "order_type": "MARKET",
+        "quantity": "1",
+    }
+    res = client.post(
+        f"/v1/portfolios/{portfolio_id}/orders", json=order_payload, cookies=token, headers=_idem_headers()
+    )
+    assert res.status_code == 201
+    order_id = res.json()["id"]
+
+    fill = db.query(Fill).join(Order, Fill.order_id == Order.id).filter(Order.id == order_id).one()
+    assert fill.market_data_source == "test-seed"  # seed_instrument_with_bar가 쓰는 source 값

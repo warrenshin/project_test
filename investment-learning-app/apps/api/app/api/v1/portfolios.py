@@ -63,6 +63,7 @@ class _PositionEval:
     unrealized_pnl: Decimal | None
     price_status: str
     price_as_of: datetime | None
+    price_source: str | None
 
 
 def _evaluate_position(db: DbSession, portfolio: Portfolio, position: Position) -> _PositionEval:
@@ -70,49 +71,61 @@ def _evaluate_position(db: DbSession, portfolio: Portfolio, position: Position) 
     if instrument is None:
         # 데이터 정합성상 있으면 안 되는 상태(포지션은 있는데 종목이 없음)지만,
         # 방어적으로 UNAVAILABLE로 처리하고 0원으로 계산하지 않는다.
-        return _PositionEval(position, None, None, None, None, PRICE_STATUS_UNAVAILABLE, None)
+        return _PositionEval(position, None, None, None, None, PRICE_STATUS_UNAVAILABLE, None, None)
 
     price_point = get_price_point(db, instrument.id, settings.market_data_staleness_threshold_seconds)
     if price_point.status == PRICE_STATUS_UNAVAILABLE:
-        return _PositionEval(position, instrument, None, None, None, PRICE_STATUS_UNAVAILABLE, None)
+        return _PositionEval(position, instrument, None, None, None, PRICE_STATUS_UNAVAILABLE, None, None)
 
     fx_rate = execution.get_fx_mid_rate(db, instrument.currency, portfolio.base_currency)
     if fx_rate is None:
         # 가격은 있지만 포트폴리오 통화로 환산할 환율이 없다 — 역시 평가 불가로
         # 취급한다(예전처럼 이 포지션을 조용히 목록에서 빼거나 합계에서만 빼고
         # 알리지 않던 것과 달리, price_status로 명확히 드러낸다).
-        return _PositionEval(position, instrument, None, None, None, PRICE_STATUS_UNAVAILABLE, price_point.as_of)
+        return _PositionEval(
+            position, instrument, None, None, None, PRICE_STATUS_UNAVAILABLE, price_point.as_of, price_point.source
+        )
 
     last_price = price_point.price * fx_rate
     market_value = last_price * Decimal(position.quantity)
     cost_basis = Decimal(position.average_cost) * fx_rate * Decimal(position.quantity)
     unrealized_pnl = market_value - cost_basis
     return _PositionEval(
-        position, instrument, last_price, market_value, unrealized_pnl, price_point.status, price_point.as_of
+        position,
+        instrument,
+        last_price,
+        market_value,
+        unrealized_pnl,
+        price_point.status,
+        price_point.as_of,
+        price_point.source,
     )
 
 
-def _aggregate_market_data_status(evals: list[_PositionEval]) -> tuple[str, datetime | None, bool]:
+def _aggregate_market_data_status(evals: list[_PositionEval]) -> tuple[str, datetime | None, bool, int, int]:
     """여러 포지션의 신선도를 하나의 포트폴리오 수준 상태로 합친다.
 
     가장 나쁜 상태를 우선한다 — 하나라도 UNAVAILABLE이면 전체를 UNAVAILABLE로,
     그 다음으로 하나라도 STALE이면 STALE로 표시해 경고를 놓치지 않는다.
+    stale_count/unavailable_count는 "몇 종목이 문제인지"를 프런트가 종목별
+    배지를 일일이 세지 않아도 바로 보여줄 수 있게 한다.
     """
     if not evals:
-        return "EMPTY", None, False
+        return "EMPTY", None, False, 0, 0
 
-    has_unavailable = any(e.price_status == PRICE_STATUS_UNAVAILABLE for e in evals)
-    has_stale = any(e.price_status == PRICE_STATUS_STALE for e in evals)
+    stale_count = sum(1 for e in evals if e.price_status == PRICE_STATUS_STALE)
+    unavailable_count = sum(1 for e in evals if e.price_status == PRICE_STATUS_UNAVAILABLE)
+    has_unavailable = unavailable_count > 0
     if has_unavailable:
         status = PRICE_STATUS_UNAVAILABLE
-    elif has_stale:
+    elif stale_count > 0:
         status = PRICE_STATUS_STALE
     else:
         status = PRICE_STATUS_FRESH
 
     as_ofs = [e.price_as_of for e in evals if e.price_as_of is not None]
     oldest_as_of = min(as_ofs) if as_ofs else None
-    return status, oldest_as_of, has_unavailable
+    return status, oldest_as_of, has_unavailable, stale_count, unavailable_count
 
 
 def _get_owned_portfolio(db: DbSession, portfolio_id: UUID, current_user: User) -> Portfolio:
@@ -221,7 +234,7 @@ def _portfolio_response(db: DbSession, portfolio: Portfolio) -> PortfolioRespons
     cash = execution.get_cash_balance(db, portfolio.id, portfolio.base_currency)
     evals = _evaluate_open_positions(db, portfolio)
     market_value = _positions_market_value_from_evals(evals)
-    status, as_of, has_unavailable = _aggregate_market_data_status(evals)
+    status, as_of, has_unavailable, stale_count, unavailable_count = _aggregate_market_data_status(evals)
     return PortfolioResponse(
         id=portfolio.id,
         base_currency=portfolio.base_currency,
@@ -231,6 +244,8 @@ def _portfolio_response(db: DbSession, portfolio: Portfolio) -> PortfolioRespons
         market_data_status=status,
         market_data_as_of=as_of,
         has_unavailable_positions=has_unavailable,
+        stale_position_count=stale_count,
+        unavailable_position_count=unavailable_count,
     )
 
 
@@ -244,6 +259,7 @@ def get_portfolio(portfolio_id: UUID, db: DbSession = Depends(get_db), current_u
 def get_positions(portfolio_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     portfolio = _get_owned_portfolio(db, portfolio_id, current_user)
     evals = _evaluate_open_positions(db, portfolio)
+    now = datetime.now(timezone.utc)
     return [
         PositionResponse(
             instrument_id=e.position.instrument_id,
@@ -255,6 +271,8 @@ def get_positions(portfolio_id: UUID, db: DbSession = Depends(get_db), current_u
             unrealized_pnl=e.unrealized_pnl,
             price_status=e.price_status,
             price_as_of=e.price_as_of,
+            price_source=e.price_source,
+            price_age_seconds=int((now - e.price_as_of).total_seconds()) if e.price_as_of is not None else None,
         )
         for e in evals
     ]
@@ -267,7 +285,7 @@ def get_performance(portfolio_id: UUID, db: DbSession = Depends(get_db), current
     evals = _evaluate_open_positions(db, portfolio)
     market_value = _positions_market_value_from_evals(evals)
     total_assets = cash + market_value
-    status, as_of, has_unavailable = _aggregate_market_data_status(evals)
+    status, as_of, has_unavailable, stale_count, unavailable_count = _aggregate_market_data_status(evals)
 
     deposits = (
         db.query(LedgerEntry)
@@ -313,6 +331,8 @@ def get_performance(portfolio_id: UUID, db: DbSession = Depends(get_db), current
         market_data_status=status,
         market_data_as_of=as_of,
         has_unavailable_positions=has_unavailable,
+        stale_position_count=stale_count,
+        unavailable_position_count=unavailable_count,
         performance_complete=performance_complete,
     )
 
