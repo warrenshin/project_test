@@ -28,8 +28,17 @@ def db():
 
 
 def seed_instrument_with_bar(
-    db, ticker: str, exchange: str, currency: str, close: float, low: float | None = None, high: float | None = None
+    db,
+    ticker: str,
+    exchange: str,
+    currency: str,
+    close: float,
+    low: float | None = None,
+    high: float | None = None,
+    as_of: datetime | None = None,
 ) -> Instrument:
+    """as_of를 명시하면 그 시각의 bar를 만든다 — 오래된(stale) 시세 시나리오를
+    테스트할 때 쓴다(예: `datetime.now(timezone.utc) - timedelta(hours=1)`)."""
     instrument = Instrument(
         ticker=ticker, exchange=exchange, currency=currency, name=ticker, is_tradable=True
     )
@@ -37,6 +46,7 @@ def seed_instrument_with_bar(
     db.flush()
 
     now = datetime.now(timezone.utc)
+    bar_as_of = as_of if as_of is not None else now
     bar = Bar(
         instrument_id=instrument.id,
         interval="1d",
@@ -47,7 +57,7 @@ def seed_instrument_with_bar(
         volume=100_000,
         bar_start=now,
         source="test-seed",
-        as_of=now,
+        as_of=bar_as_of,
         delay_seconds=0,
     )
     db.add(bar)

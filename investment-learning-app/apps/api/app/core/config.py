@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     # 시장 데이터 최신성 기준 (초). 이 시간을 넘으면 주문을 거부하거나 지연 모드로 처리한다.
     market_data_staleness_threshold_seconds: int = 900
 
+    # 시장 데이터 공급자 선택 (Phase A: apps/api/scripts/ingest_market_data.py가
+    # 어떤 MarketDataProvider를 쓸지 결정). "stooq"는 개발·기술검증용으로만
+    # 쓴다 — 상업적 표시·재배포 권한이 확인되지 않았기 때문에 아래 검증기가
+    # production에서 이 값을 막는다. 선정된 상용 공급자가 생기기 전까지는
+    # production에서 "demo"만 허용된다.
+    market_data_provider: Literal["demo", "stooq"] = "demo"
+
     # 주문 후 단일 종목 비중이 이 값(%)을 초과하면 집중도 경고를 반환한다 (차단하지 않음).
     concentration_warning_threshold_pct: int = 30
 
@@ -78,6 +85,12 @@ class Settings(BaseSettings):
                 raise ValueError("SameSite=None 쿠키는 Secure=true와 함께만 사용할 수 있습니다.")
             if self.jwt_secret == "change-me-in-env":
                 raise ValueError("production 환경에서는 JWT_SECRET을 반드시 변경해야 합니다.")
+            if self.market_data_provider == "stooq":
+                raise ValueError(
+                    "production 환경에서는 MARKET_DATA_PROVIDER=stooq를 쓸 수 없습니다 — "
+                    "Stooq는 개발·기술검증용이며 상업적 표시·재배포 권한이 확인되지 않았습니다. "
+                    "선정된 상용 공급자가 아직 없으므로 지금은 'demo'만 허용됩니다."
+                )
         return self
 
 

@@ -35,3 +35,12 @@ EXCHANGE_MARKET_MAP = {
 }
 
 FEE_POLICY_VERSION = "v1"
+
+# 시세 신선도 상태 (Phase A: MarketDataService.get_price_point가 판단).
+# FRESH: 임계값 이내의 최신 bar. STALE: bar는 있지만 임계값을 넘겨 오래됨 —
+# 주문은 차단하되 포트폴리오에는 참고값으로 표시한다. UNAVAILABLE: bar 자체가
+# 없거나(한 번도 수집 안 됨) 환율 등 평가에 필요한 값이 없어 가격을 산출할 수
+# 없음 — 0원이나 손실로 계산하지 않고 "확인 불가"로 표시한다.
+PRICE_STATUS_FRESH = "FRESH"
+PRICE_STATUS_STALE = "STALE"
+PRICE_STATUS_UNAVAILABLE = "UNAVAILABLE"
