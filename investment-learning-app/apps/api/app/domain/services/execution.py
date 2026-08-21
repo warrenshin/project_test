@@ -26,10 +26,12 @@ from app.domain.constants import (
     FEE_POLICY_VERSION,
     ORDER_ACCEPTED,
     ORDER_FILLED,
+    PRICE_STATUS_FRESH,
 )
 from app.domain.market import Bar, Instrument
 from app.domain.policy import FeePolicy, FxRate
 from app.domain.portfolio import Fill, LedgerEntry, Order, Portfolio, Position
+from app.domain.services.market_data import classify_price_freshness
 
 
 class ExecutionError(Exception):
@@ -150,8 +152,7 @@ def build_quote(
     if bar is None:
         raise NoMarketDataError("해당 종목의 시세 데이터가 없습니다.")
 
-    now = datetime.now(timezone.utc)
-    if (now - bar.as_of).total_seconds() > staleness_threshold_seconds:
+    if classify_price_freshness(bar.as_of, staleness_threshold_seconds) != PRICE_STATUS_FRESH:
         raise StaleMarketDataError(
             f"시세가 오래되었습니다 (기준시각 {bar.as_of.isoformat()}). 주문을 거부합니다."
         )

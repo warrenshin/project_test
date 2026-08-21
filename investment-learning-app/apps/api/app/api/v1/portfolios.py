@@ -10,6 +10,7 @@
 상태로 남으며, 새 시세가 들어올 때 재평가하는 것은 후속 작업이다.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -30,15 +31,88 @@ from app.api.v1.portfolio_schemas import (
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.deps import get_current_user
-from app.domain.constants import ORDER_ACCEPTED, ORDER_CANCELLED, ORDER_TERMINAL_STATUSES
+from app.domain.constants import (
+    ORDER_ACCEPTED,
+    ORDER_CANCELLED,
+    ORDER_TERMINAL_STATUSES,
+    PRICE_STATUS_FRESH,
+    PRICE_STATUS_STALE,
+    PRICE_STATUS_UNAVAILABLE,
+)
 from app.domain.journal import JournalEntry
 from app.domain.market import Instrument
 from app.domain.portfolio import Fill, LedgerEntry, Order, Portfolio, Position
 from app.domain.services import execution
+from app.domain.services.market_data_service import get_price_point
 from app.domain.user import User
 
 router = APIRouter()
 settings = get_settings()
+
+
+@dataclass
+class _PositionEval:
+    """포지션 하나를 한 번만 평가해 last_price/market_value/unrealized_pnl과
+    Phase A 신선도 상태(FRESH/STALE/UNAVAILABLE)를 함께 담는다 — 여러 엔드포인트
+    (positions/portfolio/performance)가 같은 평가를 반복하지 않게 한다."""
+
+    position: Position
+    instrument: Instrument | None
+    last_price: Decimal | None
+    market_value: Decimal | None
+    unrealized_pnl: Decimal | None
+    price_status: str
+    price_as_of: datetime | None
+
+
+def _evaluate_position(db: DbSession, portfolio: Portfolio, position: Position) -> _PositionEval:
+    instrument = db.query(Instrument).filter(Instrument.id == position.instrument_id).first()
+    if instrument is None:
+        # 데이터 정합성상 있으면 안 되는 상태(포지션은 있는데 종목이 없음)지만,
+        # 방어적으로 UNAVAILABLE로 처리하고 0원으로 계산하지 않는다.
+        return _PositionEval(position, None, None, None, None, PRICE_STATUS_UNAVAILABLE, None)
+
+    price_point = get_price_point(db, instrument.id, settings.market_data_staleness_threshold_seconds)
+    if price_point.status == PRICE_STATUS_UNAVAILABLE:
+        return _PositionEval(position, instrument, None, None, None, PRICE_STATUS_UNAVAILABLE, None)
+
+    fx_rate = execution.get_fx_mid_rate(db, instrument.currency, portfolio.base_currency)
+    if fx_rate is None:
+        # 가격은 있지만 포트폴리오 통화로 환산할 환율이 없다 — 역시 평가 불가로
+        # 취급한다(예전처럼 이 포지션을 조용히 목록에서 빼거나 합계에서만 빼고
+        # 알리지 않던 것과 달리, price_status로 명확히 드러낸다).
+        return _PositionEval(position, instrument, None, None, None, PRICE_STATUS_UNAVAILABLE, price_point.as_of)
+
+    last_price = price_point.price * fx_rate
+    market_value = last_price * Decimal(position.quantity)
+    cost_basis = Decimal(position.average_cost) * fx_rate * Decimal(position.quantity)
+    unrealized_pnl = market_value - cost_basis
+    return _PositionEval(
+        position, instrument, last_price, market_value, unrealized_pnl, price_point.status, price_point.as_of
+    )
+
+
+def _aggregate_market_data_status(evals: list[_PositionEval]) -> tuple[str, datetime | None, bool]:
+    """여러 포지션의 신선도를 하나의 포트폴리오 수준 상태로 합친다.
+
+    가장 나쁜 상태를 우선한다 — 하나라도 UNAVAILABLE이면 전체를 UNAVAILABLE로,
+    그 다음으로 하나라도 STALE이면 STALE로 표시해 경고를 놓치지 않는다.
+    """
+    if not evals:
+        return "EMPTY", None, False
+
+    has_unavailable = any(e.price_status == PRICE_STATUS_UNAVAILABLE for e in evals)
+    has_stale = any(e.price_status == PRICE_STATUS_STALE for e in evals)
+    if has_unavailable:
+        status = PRICE_STATUS_UNAVAILABLE
+    elif has_stale:
+        status = PRICE_STATUS_STALE
+    else:
+        status = PRICE_STATUS_FRESH
+
+    as_ofs = [e.price_as_of for e in evals if e.price_as_of is not None]
+    oldest_as_of = min(as_ofs) if as_ofs else None
+    return status, oldest_as_of, has_unavailable
 
 
 def _get_owned_portfolio(db: DbSession, portfolio_id: UUID, current_user: User) -> Portfolio:
@@ -90,21 +164,25 @@ def _to_order_response(order: Order) -> OrderResponse:
     )
 
 
-def _positions_market_value(db: DbSession, portfolio: Portfolio, exclude_instrument_id: UUID | None = None) -> Decimal:
-    total = Decimal(0)
+def _evaluate_open_positions(
+    db: DbSession, portfolio: Portfolio, exclude_instrument_id: UUID | None = None
+) -> list[_PositionEval]:
     positions = db.query(Position).filter(Position.portfolio_id == portfolio.id, Position.quantity > 0).all()
-    for position in positions:
-        if exclude_instrument_id is not None and position.instrument_id == exclude_instrument_id:
-            continue
-        instrument = db.query(Instrument).filter(Instrument.id == position.instrument_id).first()
-        bar = execution.get_latest_bar(db, position.instrument_id)
-        if instrument is None or bar is None:
-            continue
-        fx_rate = execution.get_fx_mid_rate(db, instrument.currency, portfolio.base_currency)
-        if fx_rate is None:
-            continue
-        total += Decimal(bar.close) * Decimal(position.quantity) * fx_rate
-    return total
+    return [
+        _evaluate_position(db, portfolio, position)
+        for position in positions
+        if exclude_instrument_id is None or position.instrument_id != exclude_instrument_id
+    ]
+
+
+def _positions_market_value_from_evals(evals: list[_PositionEval]) -> Decimal:
+    """UNAVAILABLE 포지션은 합계에서 제외한다 — 0원으로 계산하지 않는다는 뜻이며,
+    STALE 포지션은 참고값으로 그대로 합산한다(경고는 market_data_status가 맡는다)."""
+    return sum((e.market_value for e in evals if e.market_value is not None), Decimal(0))
+
+
+def _positions_market_value(db: DbSession, portfolio: Portfolio, exclude_instrument_id: UUID | None = None) -> Decimal:
+    return _positions_market_value_from_evals(_evaluate_open_positions(db, portfolio, exclude_instrument_id))
 
 
 def _concentration_warnings(
@@ -141,13 +219,18 @@ def get_my_portfolio(db: DbSession = Depends(get_db), current_user: User = Depen
 
 def _portfolio_response(db: DbSession, portfolio: Portfolio) -> PortfolioResponse:
     cash = execution.get_cash_balance(db, portfolio.id, portfolio.base_currency)
-    market_value = _positions_market_value(db, portfolio)
+    evals = _evaluate_open_positions(db, portfolio)
+    market_value = _positions_market_value_from_evals(evals)
+    status, as_of, has_unavailable = _aggregate_market_data_status(evals)
     return PortfolioResponse(
         id=portfolio.id,
         base_currency=portfolio.base_currency,
         cash_balance=cash,
         positions_market_value=market_value,
         total_assets=cash + market_value,
+        market_data_status=status,
+        market_data_as_of=as_of,
+        has_unavailable_positions=has_unavailable,
     )
 
 
@@ -160,42 +243,31 @@ def get_portfolio(portfolio_id: UUID, db: DbSession = Depends(get_db), current_u
 @router.get("/portfolios/{portfolio_id}/positions", response_model=list[PositionResponse])
 def get_positions(portfolio_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     portfolio = _get_owned_portfolio(db, portfolio_id, current_user)
-    positions = db.query(Position).filter(Position.portfolio_id == portfolio.id, Position.quantity > 0).all()
-
-    result = []
-    for position in positions:
-        instrument = db.query(Instrument).filter(Instrument.id == position.instrument_id).first()
-        bar = execution.get_latest_bar(db, position.instrument_id)
-        last_price = None
-        market_value = None
-        unrealized_pnl = None
-        if instrument is not None and bar is not None:
-            fx_rate = execution.get_fx_mid_rate(db, instrument.currency, portfolio.base_currency)
-            if fx_rate is not None:
-                last_price = Decimal(bar.close) * fx_rate
-                market_value = last_price * Decimal(position.quantity)
-                cost_basis = Decimal(position.average_cost) * fx_rate * Decimal(position.quantity)
-                unrealized_pnl = market_value - cost_basis
-        result.append(
-            PositionResponse(
-                instrument_id=position.instrument_id,
-                ticker=instrument.ticker if instrument else "",
-                quantity=position.quantity,
-                average_cost=position.average_cost,
-                last_price=last_price,
-                market_value=market_value,
-                unrealized_pnl=unrealized_pnl,
-            )
+    evals = _evaluate_open_positions(db, portfolio)
+    return [
+        PositionResponse(
+            instrument_id=e.position.instrument_id,
+            ticker=e.instrument.ticker if e.instrument else "",
+            quantity=e.position.quantity,
+            average_cost=e.position.average_cost,
+            last_price=e.last_price,
+            market_value=e.market_value,
+            unrealized_pnl=e.unrealized_pnl,
+            price_status=e.price_status,
+            price_as_of=e.price_as_of,
         )
-    return result
+        for e in evals
+    ]
 
 
 @router.get("/portfolios/{portfolio_id}/performance", response_model=PerformanceResponse)
 def get_performance(portfolio_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     portfolio = _get_owned_portfolio(db, portfolio_id, current_user)
     cash = execution.get_cash_balance(db, portfolio.id, portfolio.base_currency)
-    market_value = _positions_market_value(db, portfolio)
+    evals = _evaluate_open_positions(db, portfolio)
+    market_value = _positions_market_value_from_evals(evals)
     total_assets = cash + market_value
+    status, as_of, has_unavailable = _aggregate_market_data_status(evals)
 
     deposits = (
         db.query(LedgerEntry)
@@ -214,17 +286,9 @@ def get_performance(portfolio_id: UUID, db: DbSession = Depends(get_db), current
     total_commission = sum((Decimal(f.commission) for f in fills), Decimal(0))
     total_tax = sum((Decimal(f.tax) for f in fills), Decimal(0))
 
-    positions = db.query(Position).filter(Position.portfolio_id == portfolio.id, Position.quantity > 0).all()
-    unrealized_pnl = Decimal(0)
-    for position in positions:
-        instrument = db.query(Instrument).filter(Instrument.id == position.instrument_id).first()
-        bar = execution.get_latest_bar(db, position.instrument_id)
-        if instrument is None or bar is None:
-            continue
-        fx_rate = execution.get_fx_mid_rate(db, instrument.currency, portfolio.base_currency)
-        if fx_rate is None:
-            continue
-        unrealized_pnl += (Decimal(bar.close) - Decimal(position.average_cost)) * fx_rate * Decimal(position.quantity)
+    # UNAVAILABLE 포지션의 unrealized_pnl은 None이므로 애초에 0으로 합산되지
+    # 않는다 — market_value와 동일한 원칙(0원·전액손실로 계산하지 않음).
+    unrealized_pnl = sum((e.unrealized_pnl for e in evals if e.unrealized_pnl is not None), Decimal(0))
 
     simple_return_pct = None
     if total_deposited > 0:
@@ -241,6 +305,9 @@ def get_performance(portfolio_id: UUID, db: DbSession = Depends(get_db), current
         unrealized_pnl=unrealized_pnl,
         total_commission=total_commission,
         total_tax=total_tax,
+        market_data_status=status,
+        market_data_as_of=as_of,
+        has_unavailable_positions=has_unavailable,
     )
 
 

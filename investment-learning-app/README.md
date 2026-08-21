@@ -372,3 +372,17 @@ CI 워크플로도 매 실행 끝에 이 명령을 쓰지만, 그건 CI 러너 �
       한 번은 직접 확인을 권장한다(`apps/api/README.md`, `apps/web/README.md`
       참고). 범위 밖: 외부 클라우드 실배포, 라이브 시장 데이터·실제 LLM
       연동, 유료 리소스.
+- [x] 시장 데이터 공급자 추상화 + stale valuation 안전성 (Phase A): 한국·미국에
+      서로 다른 공급자를, 개발용과 운영용을 분리해 붙일 수 있도록
+      `MarketDataProvider` 추상화를 도입했다(`DemoMarketDataProvider` — 외부
+      네트워크 없이 결정론적 합성 데이터, `StooqMarketDataProvider` — 개발·
+      기술검증 전용, production에서는 기동 자체가 거부됨). 주문 경로의 stale
+      차단(900초 초과 시 409)은 그대로 유지하면서 판단 로직을 한 곳
+      (`market_data_service.get_price_point`)으로 모았고, 포트폴리오 조회에
+      FRESH/STALE/UNAVAILABLE 상태를 추가했다 — STALE은 참고값+경고+기준시각과
+      함께 표시하고, UNAVAILABLE은 0원·손실로 계산하지 않으며 합계에서만
+      제외한다(목록에서 사라지지 않는다). 새 DB migration은 없다(기존
+      bars/fx_rates로부터 요청 시점에 계산). 시장 데이터 파서·검증·업서트
+      단위테스트를 신규로 33종 추가했다(이전에는 0건이었다). 범위 밖: 실제
+      상용 공급자 연동, WebSocket·실시간화, 기업행사 반영, PlayMCP 조사(사용자
+      결정에 따라 이번 Phase에서 승인하지 않음), 유료 API 호출(예산 0원).

@@ -6,6 +6,7 @@ import { useAsync } from "@/lib/useAsync";
 import { LoadingBlock, ErrorBlock, EmptyBlock } from "@/components/States";
 import { VirtualFundsBanner } from "@/components/VirtualFundsBanner";
 import { useAuth } from "@/lib/auth-context";
+import type { PortfolioMarketDataStatus, PriceStatus } from "@/lib/types";
 
 function PnlText({ value }: { value: string | null }) {
   if (value === null) return <span className="muted">-</span>;
@@ -17,6 +18,56 @@ function PnlText({ value }: { value: string | null }) {
       {num > 0 ? "▲" : num < 0 ? "▼" : "-"} {sign}{num.toLocaleString()}
     </span>
   );
+}
+
+function formatAsOf(asOf: string | null): string {
+  if (!asOf) return "";
+  return new Date(asOf).toLocaleString("ko-KR", { hour12: false });
+}
+
+/** Phase A: 포트폴리오 수준 시세 신선도 경고. FRESH/EMPTY는 특별히 알릴 것이
+ * 없어 아무것도 렌더링하지 않는다. */
+function MarketDataStatusBanner({
+  status,
+  asOf,
+  hasUnavailable,
+}: {
+  status: PortfolioMarketDataStatus;
+  asOf: string | null;
+  hasUnavailable: boolean;
+}) {
+  if (status === "FRESH" || status === "EMPTY") return null;
+
+  if (status === "UNAVAILABLE") {
+    return (
+      <div className="banner banner-danger" role="alert">
+        <strong>일부 종목의 시세를 확인할 수 없습니다.</strong>
+        <p style={{ margin: "4px 0 0" }}>
+          시세를 확인할 수 없는 종목은 평가금액·총자산 합계에 포함하지 않았습니다(0원으로 처리한 것이 아닙니다).
+          아래 보유 종목 목록에서 &ldquo;시세 확인 불가&rdquo;로 표시된 종목을 확인하세요.
+        </p>
+      </div>
+    );
+  }
+
+  // STALE
+  return (
+    <div className="banner banner-warning" role="status">
+      <strong>일부 종목의 시세가 오래되었습니다.</strong>
+      <p style={{ margin: "4px 0 0" }}>
+        아래 평가금액은 최신 시세가 아닌 참고값입니다{asOf ? ` (기준시각: ${formatAsOf(asOf)})` : ""}.
+        {hasUnavailable && " 일부 종목은 시세 확인 자체가 불가능해 합계에서 제외했습니다."}
+      </p>
+    </div>
+  );
+}
+
+function PriceStatusBadge({ status }: { status: PriceStatus }) {
+  if (status === "FRESH") return null;
+  if (status === "UNAVAILABLE") {
+    return <span className="badge badge-warning">시세 확인 불가</span>;
+  }
+  return <span className="badge badge-warning">시세 지연(참고값)</span>;
 }
 
 export default function PortfolioPage() {
@@ -35,6 +86,11 @@ export default function PortfolioPage() {
     <div className="stack">
       <h1>포트폴리오</h1>
       <VirtualFundsBanner compact />
+      <MarketDataStatusBanner
+        status={performance.market_data_status}
+        asOf={performance.market_data_as_of}
+        hasUnavailable={performance.has_unavailable_positions}
+      />
 
       <div className="card stack">
         <div className="row-between">
@@ -74,7 +130,10 @@ export default function PortfolioPage() {
           {positions.map((p) => (
             <div key={p.instrument_id} className="card">
               <div className="row-between">
-                <strong>{p.ticker}</strong>
+                <span className="row" style={{ gap: 8 }}>
+                  <strong>{p.ticker}</strong>
+                  <PriceStatusBadge status={p.price_status} />
+                </span>
                 <Link href={`/order/${p.instrument_id}?side=SELL`} className="btn">
                   매도
                 </Link>
@@ -89,11 +148,17 @@ export default function PortfolioPage() {
               </div>
               <div className="row-between">
                 <span className="muted">평가금액</span>
-                <span>{p.market_value ? Number(p.market_value).toLocaleString() : "-"}</span>
+                <span>
+                  {p.price_status === "UNAVAILABLE"
+                    ? "시세 확인 불가"
+                    : p.market_value
+                      ? Number(p.market_value).toLocaleString()
+                      : "-"}
+                </span>
               </div>
               <div className="row-between">
                 <span className="muted">평가손익</span>
-                <PnlText value={p.unrealized_pnl} />
+                {p.price_status === "UNAVAILABLE" ? <span className="muted">확인 불가</span> : <PnlText value={p.unrealized_pnl} />}
               </div>
             </div>
           ))}

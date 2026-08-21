@@ -133,12 +133,20 @@ export interface BarResponse {
   delay_seconds: number;
 }
 
+// Phase A: 시장 데이터 신선도. UNAVAILABLE은 가격을 확인할 수 없다는 뜻이지
+// 0원이라는 뜻이 아니다 — 관련 금액 필드는 항상 null로 함께 온다.
+export type PriceStatus = "FRESH" | "STALE" | "UNAVAILABLE";
+export type PortfolioMarketDataStatus = PriceStatus | "EMPTY";
+
 export interface PortfolioResponse {
   id: string;
   base_currency: string;
   cash_balance: string;
   positions_market_value: string;
   total_assets: string;
+  market_data_status: PortfolioMarketDataStatus;
+  market_data_as_of: string | null;
+  has_unavailable_positions: boolean;
 }
 
 export interface PositionResponse {
@@ -149,6 +157,8 @@ export interface PositionResponse {
   last_price: string | null;
   market_value: string | null;
   unrealized_pnl: string | null;
+  price_status: PriceStatus;
+  price_as_of: string | null;
 }
 
 export interface PerformanceResponse {
@@ -162,6 +172,9 @@ export interface PerformanceResponse {
   unrealized_pnl: string;
   total_commission: string;
   total_tax: string;
+  market_data_status: PortfolioMarketDataStatus;
+  market_data_as_of: string | null;
+  has_unavailable_positions: boolean;
   note: string;
 }
 

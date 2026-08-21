@@ -36,6 +36,7 @@ app/
 │  └─ services/
 │     ├─ execution.py     # 모의 체결 엔진 (6.7) — build_quote, execute_order
 │     ├─ market_data.py   # 시장 데이터 provider 추상화·검증·upsert (6.4)
+│     ├─ market_data_service.py # 시세 신선도 판단 (FRESH/STALE/UNAVAILABLE, Phase A)
 │     ├─ gamification.py  # XP 산정 규칙 (6.3) — 일일 상한, 이벤트당 1회 지급
 │     ├─ coaching.py      # 과정 점수(7.3)·행동편향 탐지(7.4)
 │     └─ ai_coach.py      # AI 코치 파이프라인 (7.5-7.7) — Claude API + 규칙기반 폴백
@@ -104,6 +105,46 @@ liveness/readiness → 회원가입 → 로그아웃/로그인(쿠키에 `HttpOn
 기존 데이터를 훼손하지 않는다. 상태변경 요청에는 `Origin` 헤더가 실려야
 하므로(`--origin`, CSRF 방어) 기본값은 `CORS_ALLOWED_ORIGINS_RAW`의 개발
 기본값과 맞춰 두었다 — 다른 CORS 설정을 쓰면 이 값도 함께 바꿔야 한다.
+
+## 시장 데이터 공급자 추상화 (Phase A)
+
+한국·미국 시장에 서로 다른 공급자를 붙일 수 있고, 개발용과 운영용 공급자를
+분리할 수 있도록 `app/domain/services/market_data.py`에 `MarketDataProvider`
+추상화를 두었다(구현 전 결정사항 1). 현재는 두 구현체뿐이다:
+
+- **`DemoMarketDataProvider`**(기본값) — 외부 네트워크를 전혀 쓰지 않는다.
+  티커별로 결정론적인 합성 일봉을 생성해(같은 티커는 항상 같은 데이터)
+  수집→검증→upsert 파이프라인을 재현·테스트할 수 있게 한다.
+- **`StooqMarketDataProvider`** — 무료 stooq.com CSV 어댑터. **개발·기술검증
+  용으로만 유지하며 상용 운영의 기본 공급자로 쓰지 않는다** — 상업적 표시·
+  재배포 권한을 공식 문서에서 확인하지 못했기 때문이다(시장 데이터 공급자
+  조사 보고서 참고). `MARKET_DATA_PROVIDER=stooq`로 `ENVIRONMENT=production`을
+  같이 쓰면 `app/core/config.py`의 검증기가 앱 기동을 거부한다 — 실패해도
+  데모 가격으로 조용히 대체하지 않는다는 원칙을 기동 단계에서부터 강제한다.
+
+`app/domain/services/market_data_service.py`의 `get_price_point()`가 시세
+신선도를 판단한다 — `execution.build_quote`(주문 경로)와 포트폴리오 조회
+경로가 각자 다른 기준으로 "오래됨"을 판단하지 않도록, 판단 로직
+(`market_data.classify_price_freshness`)을 한 곳에 모았다.
+
+| 상태 | 의미 | 주문 | 포트폴리오 조회 |
+|---|---|---|---|
+| `FRESH` | 임계값(`MARKET_DATA_STALENESS_THRESHOLD_SECONDS`, 기본 900초) 이내 | 정상 체결 | 그대로 표시 |
+| `STALE` | bar는 있지만 임계값을 넘김 | 409로 거부(기존 동작 유지) | 참고값으로 표시 + 경고 배지 + 기준시각 |
+| `UNAVAILABLE` | bar 자체가 없거나 환율이 없어 포트폴리오 통화로 환산 불가 | 422로 거부(기존 동작 유지) | 0원·손실로 계산하지 않고 "시세 확인 불가"로 표시, 합계에서만 제외 |
+
+`GET /v1/portfolios/{id}/positions`의 각 포지션에 `price_status`·`price_as_of`가,
+`GET /v1/portfolios/{id}`와 `/performance`에 포트폴리오 전체 수준의
+`market_data_status`(`FRESH`/`STALE`/`UNAVAILABLE`/보유종목 없으면 `EMPTY`)·
+`market_data_as_of`·`has_unavailable_positions`가 추가됐다. `market_data_status`는
+가장 나쁜 상태를 우선한다(하나라도 UNAVAILABLE이면 전체가 UNAVAILABLE) — 경고를
+놓치지 않기 위해서다.
+
+새 DB migration은 없다 — 상태는 기존 `bars`/`fx_rates`로부터 요청 시점에
+계산되며, 저장이 필요한 새 영속 상태가 없기 때문이다.
+
+`apps/api/scripts/ingest_market_data.py`는 `--provider demo|stooq`로 공급자를
+고를 수 있다(기본값은 `MARKET_DATA_PROVIDER` 설정).
 
 ## 구현 상태
 
