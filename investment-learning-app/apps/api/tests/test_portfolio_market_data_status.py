@@ -104,6 +104,37 @@ def test_position_status_unavailable_excluded_from_total_but_not_zero(db):
     performance = client.get(f"/v1/portfolios/{portfolio_id}/performance", cookies=cookies).json()
     assert performance["market_data_status"] == "UNAVAILABLE"
     assert performance["has_unavailable_positions"] is True
+    # simple_return_pct는 total_assets(일부 종목 제외한 불완전한 값)를
+    # total_deposited(항상 완전한 값)로 나누므로, UNAVAILABLE 포지션이 있을 때
+    # 이 값을 그대로 노출하면 완전한 수익률처럼 보이는 왜곡이 생긴다 — null이어야 한다.
+    assert performance["performance_complete"] is False
+    assert performance["simple_return_pct"] is None
+
+
+def test_performance_complete_true_when_only_fresh_and_stale(db):
+    cookies, portfolio_id = signup_user("mdstatus-perfcomplete")
+    fresh = seed_instrument_with_bar(db, "TESTMF6", "NASDAQ", "USD", close=100)
+    stale = seed_instrument_with_bar(db, "TESTMF7", "NASDAQ", "USD", close=100)
+    _buy(cookies, portfolio_id, fresh.id)
+
+    from app.domain.market import Bar
+
+    bar = db.query(Bar).filter(Bar.instrument_id == stale.id).first()
+    bar.as_of = datetime.now(timezone.utc)
+    db.commit()
+    _buy(cookies, portfolio_id, stale.id)
+
+    bar = db.query(Bar).filter(Bar.instrument_id == stale.id).first()
+    bar.as_of = STALE_AS_OF
+    db.commit()
+
+    performance = client.get(f"/v1/portfolios/{portfolio_id}/performance", cookies=cookies).json()
+    # STALE만 있고 UNAVAILABLE은 없으므로 total_assets는 여전히 완전한 값이다 —
+    # simple_return_pct를 그대로 노출해도 왜곡되지 않는다.
+    assert performance["market_data_status"] == "STALE"
+    assert performance["has_unavailable_positions"] is False
+    assert performance["performance_complete"] is True
+    assert performance["simple_return_pct"] is not None
 
 
 def test_empty_portfolio_market_data_status_is_empty():

@@ -290,8 +290,13 @@ def get_performance(portfolio_id: UUID, db: DbSession = Depends(get_db), current
     # 않는다 — market_value와 동일한 원칙(0원·전액손실로 계산하지 않음).
     unrealized_pnl = sum((e.unrealized_pnl for e in evals if e.unrealized_pnl is not None), Decimal(0))
 
+    # UNAVAILABLE 포지션이 있으면 total_assets가 해당 포지션의 미지 가치를 제외한
+    # 불완전한 값이 되는 반면 total_deposited는 항상 완전한 값이라, 이 둘을 나누는
+    # simple_return_pct는 "정상적으로 계산된 정밀한 수익률"처럼 보이지만 실제로는
+    # 왜곡된 값이 된다. 이를 완전한 값처럼 노출하지 않기 위해 null로 내린다.
+    performance_complete = not has_unavailable
     simple_return_pct = None
-    if total_deposited > 0:
+    if total_deposited > 0 and performance_complete:
         simple_return_pct = (total_assets - total_deposited) / total_deposited * 100
 
     return PerformanceResponse(
@@ -308,6 +313,7 @@ def get_performance(portfolio_id: UUID, db: DbSession = Depends(get_db), current
         market_data_status=status,
         market_data_as_of=as_of,
         has_unavailable_positions=has_unavailable,
+        performance_complete=performance_complete,
     )
 
 

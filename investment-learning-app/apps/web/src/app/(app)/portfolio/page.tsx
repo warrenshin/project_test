@@ -113,11 +113,18 @@ export default function PortfolioPage() {
           <span className="muted">평가손익</span>
           <PnlText value={performance.unrealized_pnl} />
         </div>
-        {performance.simple_return_pct !== null && (
+        {performance.simple_return_pct !== null ? (
           <div className="row-between">
             <span className="muted">단순 수익률</span>
             <PnlText value={performance.simple_return_pct} />
           </div>
+        ) : (
+          !performance.performance_complete && (
+            <div className="row-between">
+              <span className="muted">단순 수익률</span>
+              <span className="muted">시세 확인 불가 종목이 있어 계산하지 않음</span>
+            </div>
+          )
         )}
         <p className="muted" style={{ margin: 0 }}>{performance.note}</p>
       </div>

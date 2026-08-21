@@ -106,4 +106,9 @@ class PerformanceResponse(BaseModel):
     market_data_status: Literal["FRESH", "STALE", "UNAVAILABLE", "EMPTY"]
     market_data_as_of: datetime | None
     has_unavailable_positions: bool
+    # Phase A: UNAVAILABLE 포지션이 하나라도 있으면 False. simple_return_pct는
+    # total_assets(일부 종목 제외)와 total_deposited(전액 포함)를 나누어 계산하므로,
+    # 이 값이 False일 때는 simple_return_pct가 null로 내려간다 — 실제로는 불완전한
+    # 값을 완전한 수익률처럼 보이게 하지 않기 위함이다.
+    performance_complete: bool
     note: str = "모의 성과이며 실제 투자 성과를 보장하지 않습니다."

@@ -175,6 +175,7 @@ export interface PerformanceResponse {
   market_data_status: PortfolioMarketDataStatus;
   market_data_as_of: string | null;
   has_unavailable_positions: boolean;
+  performance_complete: boolean;
   note: string;
 }
 
