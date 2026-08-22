@@ -49,6 +49,16 @@ def seed_instrument_with_bar(
     instrument = upsert_instrument(db, ticker, exchange, currency, name=ticker)
     db.flush()
 
+    # upsert_instrument는 (exchange, ticker)로 기존 활성 종목을 재사용하지만,
+    # Bar는 그런 dedup이 없어 이 헬퍼를 여러 번(다른 프로세스 실행에서 DB를
+    # 초기화하지 않고 재호출 등) 부르면 같은 instrument에 bar가 계속 쌓인다.
+    # 그러면 테스트가 "방금 만든 그 bar"를 가정하고 `db.query(Bar)...first()`로
+    # ORDER BY 없이 집는 순간, 실제 코드 경로(get_latest_bar, bar_start desc)가
+    # 쓰는 bar와 테스트가 집은 bar가 서로 달라져 재현 불가능한 실패로 이어진다
+    # (이 저장소에서 실제로 관찰된 flaky 원인). 항상 이 instrument+interval에는
+    # bar가 정확히 하나만 있도록 기존 것을 지우고 새로 만든다.
+    db.query(Bar).filter(Bar.instrument_id == instrument.id, Bar.interval == "1d").delete()
+
     now = datetime.now(timezone.utc)
     bar_as_of = as_of if as_of is not None else now
     bar = Bar(

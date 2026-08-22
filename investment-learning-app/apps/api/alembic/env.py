@@ -5,7 +5,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.core.config import get_settings
 from app.domain.base import Base
-from app.domain import ai, challenge, journal, learning, market, policy, portfolio, user  # noqa: F401 (registers models)
+from app.domain import ai, bias, challenge, journal, learning, market, policy, portfolio, user  # noqa: F401 (registers models)
 
 config = context.config
 

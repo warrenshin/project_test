@@ -81,8 +81,11 @@ def test_chasing_rally_detected_for_repeated_unplanned_buys_into_rally(db):
     # (급등 판단용 최신 bar로 잘못 집힐 수 있다), 그보다 뒤 시각에 급등 bar를
     # 둬서 확실히 가장 최근 bar가 되게 한다.
     instrument = seed_instrument_with_bar(db, "CHASE1", "NASDAQ", "USD", close=100)
+    # seed 호출 이후 시각(baseline)은 seed가 만든 bar의 bar_start보다 항상
+    # 뒤이므로, 미래 시각으로 밀어내지 않고도 "가장 최근 bar"로 만들 수
+    # 있다(미래 as_of는 이제 신뢰 불가로 걸러지므로 절대 미래로 두면 안 된다).
     baseline = datetime.now(timezone.utc)
-    rally_at = baseline + timedelta(seconds=5)
+    rally_at = baseline
 
     # 5거래일 전 낮은 가격 -> 급등한 가격의 일봉을 만든다.
     _add_daily_bar(db, instrument.id, close=100, bar_start=baseline - timedelta(days=6))
@@ -98,7 +101,7 @@ def test_chasing_rally_detected_for_repeated_unplanned_buys_into_rally(db):
 
     portfolio = db.query(Portfolio).filter(Portfolio.id == portfolio_id).first()
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "추격매수 의심 패턴" in patterns
     _assert_observed_not_diagnosed(observations)
 
@@ -107,7 +110,7 @@ def test_chasing_rally_not_flagged_when_entry_condition_recorded(db):
     cookies, portfolio_id = signup_user("bias-chase-planned")
     instrument = seed_instrument_with_bar(db, "CHASE2", "NASDAQ", "USD", close=100)
     baseline = datetime.now(timezone.utc)
-    rally_at = baseline + timedelta(seconds=5)
+    rally_at = baseline
     _add_daily_bar(db, instrument.id, close=100, bar_start=baseline - timedelta(days=6))
     _add_daily_bar(db, instrument.id, close=120, bar_start=rally_at)
 
@@ -133,7 +136,7 @@ def test_chasing_rally_not_flagged_when_entry_condition_recorded(db):
     db.commit()
 
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "추격매수 의심 패턴" not in patterns
 
 
@@ -167,7 +170,7 @@ def test_loss_aversion_detected_when_stop_loss_repeatedly_revised(db):
     client.patch(f"/v1/journals/{journal_id}", json={"stop_loss_condition": "-20%"}, cookies=cookies)
 
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "손실회피 의심 패턴" in patterns
     _assert_observed_not_diagnosed(observations)
 
@@ -195,7 +198,7 @@ def test_loss_aversion_not_flagged_for_single_unrevised_stop_loss(db):
     db.commit()
 
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "손실회피 의심 패턴" not in patterns
 
 
@@ -219,7 +222,7 @@ def test_averaging_down_detected_without_new_thesis(db):
         _make_filled_buy_order(db, portfolio_id, inst.id, fill_price=90, filled_at=t0 + timedelta(minutes=10))
 
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "물타기 집착 의심 패턴" in patterns
     _assert_observed_not_diagnosed(observations)
 
@@ -246,7 +249,7 @@ def test_averaging_down_not_flagged_when_new_thesis_recorded_between_buys(db):
     _make_filled_buy_order(db, portfolio_id, instrument.id, fill_price=90, filled_at=now + timedelta(minutes=10))
 
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "물타기 집착 의심 패턴" not in patterns
 
 
@@ -265,7 +268,7 @@ def test_overtrading_detected_within_short_window(db):
         _make_filled_buy_order(db, portfolio_id, instrument.id, fill_price=100, filled_at=now + timedelta(minutes=i))
 
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "과잉매매 의심 패턴" in patterns
     _assert_observed_not_diagnosed(observations)
 
@@ -285,7 +288,7 @@ def test_overtrading_not_flagged_when_orders_spread_out(db):
         )
 
     observations = coaching.detect_biases(db, portfolio.user_id)
-    patterns = [o["pattern"] for o in observations]
+    patterns = [o["pattern"] for o in observations if o["detected"]]
     assert "과잉매매 의심 패턴" not in patterns
 
 
