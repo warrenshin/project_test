@@ -39,6 +39,9 @@ export default function MePage() {
         <Link href="/journal" className="btn btn-block">
           내 투자일지 보기
         </Link>
+        <Link href="/badges" className="btn btn-block">
+          내 배지 보기
+        </Link>
         <button className="btn btn-block" onClick={logout} type="button">
           로그아웃
         </button>

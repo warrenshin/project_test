@@ -274,3 +274,132 @@ export interface BiasReportResponse {
 export interface ApiErrorBody {
   detail?: string | { msg: string }[];
 }
+
+// --- 7일 학습 챌린지 · 배지 ---
+// 수익률·거래횟수는 어떤 미션·배지 조건에도 쓰이지 않는다 — 전부 학습완료·
+// 퀴즈통과·일지작성·복기같은 "과정"만 본다.
+
+export interface ChallengeMissionSummary {
+  id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  mission_type: string;
+  xp_amount: number;
+  is_required: boolean;
+  order_index: number;
+  public_config: Record<string, unknown>;
+}
+
+export interface ChallengeDaySummary {
+  day_number: number;
+  title: string;
+  description: string | null;
+  missions: ChallengeMissionSummary[];
+}
+
+export interface ChallengeSummary {
+  id: string;
+  code: string;
+  version: number;
+  title: string;
+  description: string | null;
+  total_days: number;
+}
+
+export interface ChallengeDetailResponse extends ChallengeSummary {
+  days: ChallengeDaySummary[];
+}
+
+export interface UserMissionResponse extends ChallengeMissionSummary {
+  completed: boolean;
+  completed_at: string | null;
+  xp_awarded: number | null;
+}
+
+// 서버가 계산한 값이다: LOCKED/AVAILABLE/IN_PROGRESS/COMPLETED. 클라이언트는
+// 절대 이 값을 직접 만들거나 뒤집지 않는다.
+export type ChallengeDayStatus = "LOCKED" | "AVAILABLE" | "IN_PROGRESS" | "COMPLETED";
+
+export interface UserChallengeDayResponse {
+  day_number: number;
+  title: string;
+  description: string | null;
+  status: ChallengeDayStatus;
+  completed_at: string | null;
+  missions: UserMissionResponse[];
+}
+
+export type UserChallengeStatus = "ACTIVE" | "COMPLETED" | "EXPIRED";
+
+export interface UserChallengeResponse {
+  id: string;
+  challenge_id: string;
+  challenge_code: string;
+  challenge_title: string;
+  status: UserChallengeStatus;
+  timezone: string;
+  started_at: string;
+  started_date_local: string;
+  completed_at: string | null;
+  current_day: number;
+  total_days: number;
+  total_xp_earned: number;
+  days: UserChallengeDayResponse[];
+  next_action: ChallengeMissionSummary | null;
+}
+
+export interface MissionVerifyPayload {
+  note?: string;
+  choice?: string;
+  acknowledged?: boolean;
+  journal_id?: string;
+  portfolio_id?: string;
+  instrument_id?: string;
+  side?: "BUY" | "SELL";
+  order_type?: "MARKET" | "LIMIT";
+  quantity?: string;
+  limit_price?: string;
+}
+
+export interface NewlyAwardedBadge {
+  code: string;
+  title: string;
+  description: string | null;
+}
+
+export interface MissionVerifyResponse {
+  mission_completed: boolean;
+  already_completed: boolean;
+  reason: string | null;
+  xp_awarded: number;
+  day_completed: boolean;
+  challenge_completed: boolean;
+  newly_awarded_badges: NewlyAwardedBadge[];
+  extra: Record<string, unknown>;
+}
+
+export interface BadgeDefinitionResponse {
+  code: string;
+  version: number;
+  title: string;
+  description: string | null;
+}
+
+export interface UserBadgeResponse {
+  code: string;
+  title: string;
+  description: string | null;
+  earned_at: string;
+  evidence_type: string;
+}
+
+// 실제 푸시 발송은 없다 — 조회 시점에 서버가 계산한 "지금 보여줄 알림"만 온다.
+export type NotificationType = "LESSON_DUE" | "TRADE_REVIEW_DUE" | "CHALLENGE_STEP_DUE" | "BADGE_EARNED";
+
+export interface NotificationResponse {
+  type: NotificationType;
+  title: string;
+  body: string;
+  href: string;
+}

@@ -22,18 +22,27 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from tests.conftest import signup_user
 
 DOWN_REVISION = "d9719e5a287e"  # 이 migration 바로 이전
 TARGET_REVISION = "94b30d15c128"  # 이 migration 자체
-HEAD_REVISION = "d5d5285c1108"  # 이 파일의 테스트가 끝난 뒤 반드시 복귀해야 하는 최종 head
 
 
 def _alembic_config() -> Config:
     api_root = Path(__file__).resolve().parents[1]
     return Config(str(api_root / "alembic.ini"))
+
+
+def _current_head(cfg: Config) -> str:
+    """항상 실제 최신 head를 동적으로 찾는다 — 이후 새 migration이 추가돼도
+    이 파일의 상수를 손으로 갱신할 필요가 없고(잊어버리면 뒤에 실행되는 다른
+    테스트 파일이 보는 DB가 예전 head로 되돌아가 버리는 사고를 방지한다)."""
+    heads = ScriptDirectory.from_config(cfg).get_heads()
+    assert len(heads) == 1, f"head가 여러 개입니다: {heads}"
+    return heads[0]
 
 
 @pytest.fixture
@@ -42,9 +51,10 @@ def migration_cycle():
     테스트가 끝나면(성공/실패 무관) 항상 head로 복귀시켜 이후 다른 테스트
     파일에 영향을 주지 않는다."""
     cfg = _alembic_config()
+    head_revision = _current_head(cfg)
     command.downgrade(cfg, DOWN_REVISION)
     yield cfg
-    command.upgrade(cfg, HEAD_REVISION)
+    command.upgrade(cfg, head_revision)
 
 
 def _insert_instrument(db, ticker: str, exchange: str, valid_to=None) -> str:
