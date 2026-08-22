@@ -386,3 +386,27 @@ CI 워크플로도 매 실행 끝에 이 명령을 쓰지만, 그건 CI 러너 �
       단위테스트를 신규로 33종 추가했다(이전에는 0건이었다). 범위 밖: 실제
       상용 공급자 연동, WebSocket·실시간화, 기업행사 반영, PlayMCP 조사(사용자
       결정에 따라 이번 Phase에서 승인하지 않음), 유료 API 호출(예산 0원).
+- [x] 7일 학습 챌린지 + 과정 중심 배지 시스템: 기존 학습·퀴즈·XP·투자일지·
+      모의투자를 하나의 흐름으로 잇는 초보자용 7일 챌린지를 추가했다. 새
+      테이블 8개(challenges/challenge_days/challenge_missions/
+      user_challenges/user_challenge_days/user_mission_progress/
+      badge_definitions/user_badges)만 추가했고 기존 테이블은 손대지
+      않았다. 모든 미션 완료·Day 상태·챌린지 상태·XP·배지는 서버가
+      계산하며(EXPIRED·Day 상태는 DB에 저장하지 않고 조회 시점에 계산),
+      각 미션은 실제 근거(LessonProgress/QuizAttempt/JournalEntry/
+      Portfolio/AiMessage)를 서버가 소유권까지 검증한 뒤에만 완료
+      처리한다 — 수익률이나 거래 횟수는 그 어떤 미션·배지 조건에도 쓰지
+      않았다. 시간대는 `zoneinfo`로 DST-safe하게 계산하고 챌린지 시작
+      시점에 고정하며, 하루를 놓쳐도 즉시 실패시키지 않고 이전 Day를
+      계속 완료할 수 있다. XP 중복 지급은 `UserMissionProgress`/
+      `UserBadge`의 unique 제약 + SAVEPOINT 패턴으로 막고, 챌린지 완주
+      보너스는 compare-and-swap으로 정확히 한 번만 지급한다. 프런트엔드에
+      `/challenge`(소개→시작→7일 진행 지도→완주 축하), `/badges`, 홈 화면
+      위젯(PnL은 표시하지 않음)을 추가했다. 실제 푸시 발송 없이 조회
+      시점에 계산되는 인앱 알림 스텁(`GET /v1/me/notifications`)도
+      추가했다 — 매수를 종용하거나 조급함을 자극하는 문구는 쓰지 않는다.
+      백엔드 테스트 27종, Playwright E2E 3종을 새로 추가했고 기존 전체
+      테스트·E2E는 회귀 없이 그대로 통과한다. 자세한 내용은
+      `docs/features/seven-day-challenge.md` 참고. 범위 밖: 실제 푸시,
+      리더보드·친구 경쟁, 현금·쿠폰 보상, 6~30강 본편, 관리자를 통한 수동
+      배지 지급(이 저장소에 아직 관리자 권한 체계가 없음).

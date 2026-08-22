@@ -1,6 +1,9 @@
 import type {
+  BadgeDefinitionResponse,
   BarResponse,
   BiasReportResponse,
+  ChallengeDetailResponse,
+  ChallengeSummary,
   InstrumentDetail,
   InstrumentSummary,
   JournalCoachingResponse,
@@ -9,6 +12,9 @@ import type {
   LearningSummaryResponse,
   LessonDetailResponse,
   LessonProgressResponse,
+  MissionVerifyPayload,
+  MissionVerifyResponse,
+  NotificationResponse,
   OrderPreviewResponse,
   OrderResponse,
   PerformanceResponse,
@@ -16,6 +22,8 @@ import type {
   PositionResponse,
   QuizAttemptResponse,
   QuizDetailResponse,
+  UserBadgeResponse,
+  UserChallengeResponse,
   UserResponse,
 } from "./types";
 
@@ -233,3 +241,29 @@ export const getJournalCoaching = (journalId: string) =>
   request<JournalCoachingResponse>(`/v1/journals/${journalId}/coaching`);
 
 export const getBiasReport = () => request<BiasReportResponse>("/v1/me/bias-report");
+
+// --- 7일 학습 챌린지 · 배지 ---
+export const getChallenges = () => request<ChallengeSummary[]>("/v1/challenges");
+export const getChallengeDetail = (challengeId: string) =>
+  request<ChallengeDetailResponse>(`/v1/challenges/${challengeId}`);
+export const startChallenge = (challengeId: string, timezone?: string) =>
+  request<UserChallengeResponse>(`/v1/challenges/${challengeId}/start`, {
+    method: "POST",
+    body: timezone ? { timezone } : {},
+  });
+export const getActiveUserChallenge = () =>
+  request<UserChallengeResponse>("/v1/me/challenges/active");
+export const getUserChallenge = (userChallengeId: string) =>
+  request<UserChallengeResponse>(`/v1/me/challenges/${userChallengeId}`);
+export const verifyChallengeMission = (
+  userChallengeId: string,
+  missionId: string,
+  payload: MissionVerifyPayload
+) =>
+  request<MissionVerifyResponse>(
+    `/v1/me/challenges/${userChallengeId}/missions/${missionId}/verify`,
+    { method: "POST", body: payload }
+  );
+export const getBadgeDefinitions = () => request<BadgeDefinitionResponse[]>("/v1/badges");
+export const getMyBadges = () => request<UserBadgeResponse[]>("/v1/me/badges");
+export const getMyNotifications = () => request<NotificationResponse[]>("/v1/me/notifications");

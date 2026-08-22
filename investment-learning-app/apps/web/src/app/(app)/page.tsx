@@ -2,11 +2,76 @@
 
 import Link from "next/link";
 import { useAuth } from "@/lib/auth-context";
-import { getLearningPaths, getLearningSummary } from "@/lib/api";
+import { ApiError, getActiveUserChallenge, getLearningPaths, getLearningSummary } from "@/lib/api";
 import { useAsync } from "@/lib/useAsync";
 import { LoadingBlock, ErrorBlock } from "@/components/States";
 import { VirtualFundsBanner } from "@/components/VirtualFundsBanner";
-import type { LessonSummary } from "@/lib/types";
+import { NotificationList } from "@/components/NotificationList";
+import type { LessonSummary, UserChallengeResponse } from "@/lib/types";
+
+async function loadActiveChallengeOrNull(): Promise<UserChallengeResponse | null> {
+  try {
+    return await getActiveUserChallenge();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+function ChallengeWidget() {
+  const challenge = useAsync(loadActiveChallengeOrNull, []);
+
+  if (challenge.loading) return null;
+  if (challenge.error) return null; // 홈 화면 핵심 흐름을 막지 않는다 — 위젯 하나 실패로 홈 전체를 에러로 만들지 않는다.
+
+  if (!challenge.data) {
+    return (
+      <div className="card">
+        <h2>7일 학습 챌린지</h2>
+        <p className="muted">학습·퀴즈·투자일지·모의투자를 하나로 이어주는 7일 챌린지를 시작해보세요.</p>
+        <Link href="/challenge" className="btn btn-primary btn-block">
+          챌린지 시작하기
+        </Link>
+      </div>
+    );
+  }
+
+  const uc = challenge.data;
+  if (uc.status === "COMPLETED") {
+    return (
+      <div className="card">
+        <h2>7일 챌린지</h2>
+        <p className="muted">🎉 7일 챌린지를 완주했습니다. 획득 XP {uc.total_xp_earned}</p>
+        <Link href="/badges" className="btn btn-block">
+          내 배지 보기
+        </Link>
+      </div>
+    );
+  }
+
+  const today = uc.days.find((d) => d.day_number === uc.current_day);
+  const todaysCompleted = today ? today.missions.filter((m) => m.completed).length : 0;
+  const todaysTotal = today ? today.missions.length : 0;
+  const completedDays = uc.days.filter((d) => d.status === "COMPLETED").length;
+
+  return (
+    <div className="card">
+      <h2>7일 챌린지 · Day {uc.current_day}/{uc.total_days}</h2>
+      <div className="stack">
+        <p className="muted" style={{ margin: 0 }}>
+          오늘 미션 {todaysCompleted}/{todaysTotal}개 완료 · 지금까지 {completedDays}일 완료
+        </p>
+        <div className="progress-track">
+          <div className="progress-fill" style={{ width: `${Math.round((completedDays / uc.total_days) * 100)}%` }} />
+        </div>
+        {uc.next_action && <p style={{ margin: 0 }}>다음 할 일: <strong>{uc.next_action.title}</strong></p>}
+        <Link href="/challenge" className="btn btn-primary btn-block">
+          이어하기
+        </Link>
+      </div>
+    </div>
+  );
+}
 
 function firstLesson(paths: Awaited<ReturnType<typeof getLearningPaths>>): LessonSummary | null {
   for (const path of paths) {
@@ -36,6 +101,8 @@ export default function HomePage() {
     <div className="stack">
       <h1>안녕하세요 👋</h1>
       <VirtualFundsBanner />
+      <NotificationList />
+      <ChallengeWidget />
 
       <div className="card">
         <h2>내 포트폴리오</h2>
