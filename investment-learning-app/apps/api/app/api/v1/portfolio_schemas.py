@@ -75,6 +75,12 @@ class PositionResponse(BaseModel):
     # 값이 0이라는 뜻이 아니다.
     price_status: PriceStatus
     price_as_of: datetime | None
+    # 이 가격이 어디서 왔는지(예: "demo", "stooq", "seed-sample") — 사용자에게
+    # 그대로 보여도 안전한 일반 식별자만 담는다(내부 예외 메시지·공급자 오류
+    # 상세는 담지 않는다). UNAVAILABLE이면 null.
+    price_source: str | None
+    # price_as_of로부터 지금까지 흐른 시간(초, UTC 기준). UNAVAILABLE이면 null.
+    price_age_seconds: int | None
 
 
 class PortfolioResponse(BaseModel):
@@ -90,6 +96,10 @@ class PortfolioResponse(BaseModel):
     market_data_status: Literal["FRESH", "STALE", "UNAVAILABLE", "EMPTY"]
     market_data_as_of: datetime | None
     has_unavailable_positions: bool
+    # 몇 종목이 문제인지 — 프런트가 종목별 배지를 일일이 세지 않아도 바로 보여줄
+    # 수 있다. positions 응답의 price_status 배지 개수와 항상 일치해야 한다.
+    stale_position_count: int
+    unavailable_position_count: int
 
 
 class PerformanceResponse(BaseModel):
@@ -106,6 +116,8 @@ class PerformanceResponse(BaseModel):
     market_data_status: Literal["FRESH", "STALE", "UNAVAILABLE", "EMPTY"]
     market_data_as_of: datetime | None
     has_unavailable_positions: bool
+    stale_position_count: int
+    unavailable_position_count: int
     # Phase A: UNAVAILABLE 포지션이 하나라도 있으면 False. simple_return_pct는
     # total_assets(일부 종목 제외)와 total_deposited(전액 포함)를 나누어 계산하므로,
     # 이 값이 False일 때는 simple_return_pct가 null로 내려간다 — 실제로는 불완전한

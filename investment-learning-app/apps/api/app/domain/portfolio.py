@@ -67,6 +67,10 @@ class Fill(Base, UUIDPrimaryKeyMixin):
     slippage: Mapped[Numeric] = mapped_column(Numeric(24, 8), nullable=False, default=0)
     realized_pnl: Mapped[Numeric | None] = mapped_column(Numeric(24, 8), nullable=True)
     market_data_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # 이 체결가의 근거가 된 bar의 출처(예: "demo", "stooq", "seed-sample").
+    # nullable — 이 컬럼이 추가되기 전에 생긴 기존 체결 행은 null로 남는다
+    # (그 기록 자체가 없었으므로 소급 채움 불가, 거짓 값을 만들지 않는다).
+    market_data_source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     filled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

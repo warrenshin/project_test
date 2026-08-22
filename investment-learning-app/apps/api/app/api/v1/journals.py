@@ -22,6 +22,7 @@ from app.api.v1.journal_schemas import (
 )
 from app.core.db import get_db
 from app.core.deps import get_current_user
+from app.domain.constants import BAR_INTERVAL_DAILY
 from app.domain.journal import JournalEntry, JournalVersion
 from app.domain.market import Instrument
 from app.domain.portfolio import Order, Portfolio
@@ -68,7 +69,7 @@ def create_pre_trade_journal(
         if order is None:
             raise HTTPException(status_code=404, detail="주문을 찾을 수 없습니다.")
 
-    bar = execution.get_latest_bar(db, instrument.id)
+    bar = execution.get_latest_bar(db, instrument.id, interval=BAR_INTERVAL_DAILY)
     market_snapshot = None
     if bar is not None:
         market_snapshot = {

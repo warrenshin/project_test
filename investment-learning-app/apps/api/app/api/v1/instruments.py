@@ -11,13 +11,15 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session as DbSession
 
 from app.api.v1.instrument_schemas import BarResponse, InstrumentDetail, InstrumentSummary
 from app.core.db import get_db
+from app.domain.constants import BAR_INTERVAL_DAILY
 from app.domain.market import Bar, Instrument
 from app.domain.services.execution import get_latest_bar
+from app.domain.services.market_data import normalize_exchange
 
 router = APIRouter()
 
@@ -31,16 +33,35 @@ def search_instruments(
 ):
     query = db.query(Instrument).filter(Instrument.valid_to.is_(None))
     if exchange:
-        query = query.filter(Instrument.exchange == exchange.upper())
-    if q:
-        like = f"%{q}%"
-        query = query.filter(or_(Instrument.ticker.ilike(like), Instrument.name.ilike(like)))
-    instruments = query.order_by(Instrument.ticker).limit(limit).all()
+        query = query.filter(Instrument.exchange == normalize_exchange(exchange))
+
+    order_columns = []
+    stripped_q = q.strip()
+    if stripped_q:
+        normalized_q = stripped_q.upper()
+        contains_pattern = f"%{stripped_q}%"
+        prefix_pattern = f"{normalized_q}%"
+        query = query.filter(or_(Instrument.ticker.ilike(contains_pattern), Instrument.name.ilike(contains_pattern)))
+        # DB 종류에 따라 정렬 결과가 달라지지 않도록, "어느 정도로 일치하는가"를
+        # 명시적인 순위 값으로 계산해 정렬 기준에 포함시킨다: ticker 정확히
+        # 일치(0) > ticker로 시작(1) > 이름만 일치(2, 그 외 전부).
+        match_rank = case(
+            (func.upper(Instrument.ticker) == normalized_q, 0),
+            (func.upper(Instrument.ticker).like(prefix_pattern), 1),
+            else_=2,
+        )
+        order_columns.append(match_rank)
+
+    # 동점일 때도 항상 같은 순서가 나오도록 exchange, ticker, 그리고 최종
+    # tie-breaker로 id까지 명시한다 — DB가 보장하지 않는 "동점 행의 기본 순서"에
+    # 의존하지 않는다.
+    order_columns.extend([Instrument.exchange, Instrument.ticker, Instrument.id])
+    instruments = query.order_by(*order_columns).limit(limit).all()
     return [InstrumentSummary.model_validate(i, from_attributes=True) for i in instruments]
 
 
 def _to_detail(db: DbSession, instrument: Instrument) -> InstrumentDetail:
-    bar = get_latest_bar(db, instrument.id)
+    bar = get_latest_bar(db, instrument.id, interval=BAR_INTERVAL_DAILY)
     return InstrumentDetail(
         id=instrument.id,
         ticker=instrument.ticker,

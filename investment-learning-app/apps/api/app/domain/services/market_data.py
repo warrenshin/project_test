@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DbSession
 
 from app.domain.constants import PRICE_STATUS_FRESH, PRICE_STATUS_STALE
@@ -63,6 +64,10 @@ class ProviderFetchError(MarketDataError):
 
 
 class InvalidBarDataError(MarketDataError):
+    pass
+
+
+class InvalidInstrumentIdentifierError(MarketDataError):
     pass
 
 
@@ -230,14 +235,27 @@ def get_provider(name: str) -> MarketDataProvider:
 
 
 def classify_price_freshness(as_of: datetime, staleness_threshold_seconds: int) -> str:
-    """가격의 기준시각(as_of)이 임계값 안이면 FRESH, 벗어나면 STALE.
+    """가격의 기준시각(as_of)이 임계값 안이면 FRESH, 벗어나면 STALE(경계값 900초는
+    FRESH — age_seconds <= threshold).
 
     `execution.build_quote`(주문 경로)와 `market_data_service.get_price_point`
     (포트폴리오 조회 경로)가 이 판단을 각자 다시 구현하지 않고 여기서만 계산한다
     — 두 경로의 "오래됨" 기준이 은근슬쩍 어긋나는 것을 막는다. bar 자체가
     없는 경우(UNAVAILABLE)는 이 함수의 책임이 아니다 — 호출측이 먼저 판단한다.
+
+    as_of가 미래 시각이거나 timezone-naive이면 ValueError를 던진다 — 둘 다
+    신뢰할 수 없는 입력이다(공급자 응답 손상, 시계 어긋남, 정규화 누락).
+    이를 조용히 "FRESH"로 계산하면(미래 시각은 age가 음수라 threshold 이하로
+    나온다) 오히려 가장 못 믿을 데이터가 가장 신선한 데이터로 둔갑한다.
+    호출측(build_quote/get_price_point)은 이 예외를 UNAVAILABLE/거부로
+    변환한다 — 못 믿을 시각을 FRESH로 계산하는 것보다 안전하다.
     """
-    age_seconds = (datetime.now(timezone.utc) - as_of).total_seconds()
+    if as_of.tzinfo is None:
+        raise ValueError(f"as_of는 timezone-aware(UTC)여야 합니다: {as_of!r}")
+    now = datetime.now(timezone.utc)
+    age_seconds = (now - as_of).total_seconds()
+    if age_seconds < 0:
+        raise ValueError(f"as_of가 미래 시각입니다: {as_of.isoformat()} (현재: {now.isoformat()})")
     return PRICE_STATUS_FRESH if age_seconds <= staleness_threshold_seconds else PRICE_STATUS_STALE
 
 
@@ -258,7 +276,28 @@ def validate_bar(bar: RawBar) -> None:
         raise InvalidBarDataError(f"bar_start가 미래 시각입니다: {bar}")
 
 
+def normalize_ticker(ticker: str) -> str:
+    """seed/ingestion/API/테스트가 공통으로 써야 하는 정규화 규칙: 앞뒤 공백 제거 +
+    대문자 통일. 이미 이 형태인 기존 값(예: "005930", "AAPL")은 그대로 유지된다 —
+    기존 종목 ID를 바꾸지 않는다. 사용자 검색어나 provider 고유 심볼은 이 함수를
+    거치지 않는다 — 내부 ticker 식별자에만 적용한다."""
+    normalized = ticker.strip().upper()
+    if not normalized:
+        raise InvalidInstrumentIdentifierError("ticker는 빈 값일 수 없습니다.")
+    return normalized
+
+
+def normalize_exchange(exchange: str) -> str:
+    """ticker와 동일한 정규화 규칙(공백 제거 + 대문자)을 exchange 코드에도 적용한다."""
+    normalized = exchange.strip().upper()
+    if not normalized:
+        raise InvalidInstrumentIdentifierError("exchange는 빈 값일 수 없습니다.")
+    return normalized
+
+
 def get_active_instrument(db: DbSession, ticker: str, exchange: str) -> Instrument | None:
+    ticker = normalize_ticker(ticker)
+    exchange = normalize_exchange(exchange)
     return (
         db.query(Instrument)
         .filter(Instrument.ticker == ticker, Instrument.exchange == exchange, Instrument.valid_to.is_(None))
@@ -275,6 +314,19 @@ def upsert_instrument(
     industry: str | None = None,
     valid_from: date | None = None,
 ) -> Instrument:
+    """(exchange, 정규화된 ticker)당 활성(valid_to IS NULL) 행이 하나만 존재하게 한다.
+
+    "확인 후 삽입"(check-then-insert)만으로는 두 worker가 동시에 같은 종목을
+    처음 수집할 때의 race condition을 막을 수 없다 — 두 세션 모두 "활성 행 없음"을
+    보고 나서 둘 다 삽입을 시도할 수 있다. 그래서 DB의 partial unique index를
+    최종 방어선으로 두고, 그 제약 위반(IntegrityError)을 여기서 잡아 방금 다른
+    worker가 커밋한 행을 다시 조회해 그쪽을 갱신하는 것으로 안전하게 수렴시킨다.
+    SAVEPOINT(begin_nested) 안에서만 삽입을 시도하므로, 충돌해도 이 함수 호출
+    자체만 롤백되고 같은 세션의 다른 변경사항은 영향받지 않는다.
+    """
+    ticker = normalize_ticker(ticker)
+    exchange = normalize_exchange(exchange)
+
     instrument = get_active_instrument(db, ticker, exchange)
     if instrument is not None:
         instrument.name = name
@@ -292,7 +344,24 @@ def upsert_instrument(
         valid_from=valid_from,
     )
     db.add(instrument)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.flush()
+    except IntegrityError:
+        # begin_nested()의 SAVEPOINT는 flush 실패 시 자동으로 그 지점까지
+        # 롤백되지만, 세션 자체는 "flush 중 예외 발생" 상태로 남아 명시적
+        # rollback() 전에는 어떤 쿼리도 거부한다(SQLAlchemy 특성). 여기서
+        # rollback()을 호출해도 SAVEPOINT 범위 안에서만 되돌아가므로, 같은
+        # 세션에 있는 다른 무관한 pending 변경사항은 영향받지 않는다.
+        db.rollback()
+        instrument = get_active_instrument(db, ticker, exchange)
+        if instrument is None:
+            # unique 제약이 이 (exchange, ticker) 조합과 무관한 다른 이유로
+            # 실패했다는 뜻이다 — 조용히 삼키지 않고 그대로 올린다.
+            raise
+        instrument.name = name
+        instrument.currency = currency
+        instrument.industry = industry
     return instrument
 
 

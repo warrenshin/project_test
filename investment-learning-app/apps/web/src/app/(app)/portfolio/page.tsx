@@ -25,25 +25,49 @@ function formatAsOf(asOf: string | null): string {
   return new Date(asOf).toLocaleString("ko-KR", { hour12: false });
 }
 
+function formatAge(seconds: number | null): string | null {
+  if (seconds === null) return null;
+  if (seconds < 60) return `${seconds}초 전`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}분 전`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}시간 전`;
+  return `${Math.floor(seconds / 86400)}일 전`;
+}
+
+// price_source는 항상 "demo"/"stooq"/"seed-sample" 같은 안전한 고정 식별자다
+// (내부 예외 메시지나 공급자 오류 상세가 아니다) — 알려진 값은 한국어로,
+// 모르는 값은 원문 그대로 보여준다(둘 다 안전하게 노출해도 되는 문자열).
+const PRICE_SOURCE_LABELS: Record<string, string> = {
+  demo: "데모 데이터",
+  stooq: "Stooq(개발·검증용)",
+  "seed-sample": "샘플 데이터",
+};
+
+function formatPriceSource(source: string | null): string {
+  if (!source) return "출처 확인 불가";
+  return PRICE_SOURCE_LABELS[source] ?? source;
+}
+
 /** Phase A: 포트폴리오 수준 시세 신선도 경고. FRESH/EMPTY는 특별히 알릴 것이
  * 없어 아무것도 렌더링하지 않는다. */
 function MarketDataStatusBanner({
   status,
   asOf,
-  hasUnavailable,
+  staleCount,
+  unavailableCount,
 }: {
   status: PortfolioMarketDataStatus;
   asOf: string | null;
-  hasUnavailable: boolean;
+  staleCount: number;
+  unavailableCount: number;
 }) {
   if (status === "FRESH" || status === "EMPTY") return null;
 
   if (status === "UNAVAILABLE") {
     return (
       <div className="banner banner-danger" role="alert">
-        <strong>일부 종목의 시세를 확인할 수 없습니다.</strong>
+        <strong>시세를 확인할 수 없는 종목이 {unavailableCount}개 있습니다.</strong>
         <p style={{ margin: "4px 0 0" }}>
-          시세를 확인할 수 없는 종목은 평가금액·총자산 합계에 포함하지 않았습니다(0원으로 처리한 것이 아닙니다).
+          해당 종목은 평가금액·총자산 합계에 포함하지 않았습니다(0원으로 처리한 것이 아닙니다).
           아래 보유 종목 목록에서 &ldquo;시세 확인 불가&rdquo;로 표시된 종목을 확인하세요.
         </p>
       </div>
@@ -53,10 +77,9 @@ function MarketDataStatusBanner({
   // STALE
   return (
     <div className="banner banner-warning" role="status">
-      <strong>일부 종목의 시세가 오래되었습니다.</strong>
+      <strong>시세가 오래된 종목이 {staleCount}개 있습니다.</strong>
       <p style={{ margin: "4px 0 0" }}>
-        아래 평가금액은 최신 시세가 아닌 참고값입니다{asOf ? ` (기준시각: ${formatAsOf(asOf)})` : ""}.
-        {hasUnavailable && " 일부 종목은 시세 확인 자체가 불가능해 합계에서 제외했습니다."}
+        해당 종목의 평가금액은 최신 시세가 아닌 참고값입니다{asOf ? ` (기준시각: ${formatAsOf(asOf)})` : ""}.
       </p>
     </div>
   );
@@ -68,6 +91,19 @@ function PriceStatusBadge({ status }: { status: PriceStatus }) {
     return <span className="badge badge-warning">시세 확인 불가</span>;
   }
   return <span className="badge badge-warning">시세 지연(참고값)</span>;
+}
+
+function PriceSourceLine({ source, ageSeconds }: { source: string | null; ageSeconds: number | null }) {
+  const age = formatAge(ageSeconds);
+  return (
+    <div className="row-between">
+      <span className="muted">시세 출처</span>
+      <span className="muted">
+        {formatPriceSource(source)}
+        {age && ` · ${age}`}
+      </span>
+    </div>
+  );
 }
 
 export default function PortfolioPage() {
@@ -89,7 +125,8 @@ export default function PortfolioPage() {
       <MarketDataStatusBanner
         status={performance.market_data_status}
         asOf={performance.market_data_as_of}
-        hasUnavailable={performance.has_unavailable_positions}
+        staleCount={performance.stale_position_count}
+        unavailableCount={performance.unavailable_position_count}
       />
 
       <div className="card stack">
@@ -167,6 +204,7 @@ export default function PortfolioPage() {
                 <span className="muted">평가손익</span>
                 {p.price_status === "UNAVAILABLE" ? <span className="muted">확인 불가</span> : <PnlText value={p.unrealized_pnl} />}
               </div>
+              <PriceSourceLine source={p.price_source} ageSeconds={p.price_age_seconds} />
             </div>
           ))}
         </div>

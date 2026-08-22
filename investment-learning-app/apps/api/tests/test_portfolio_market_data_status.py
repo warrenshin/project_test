@@ -36,11 +36,16 @@ def test_position_status_fresh_when_bar_is_recent(db):
     assert position["price_status"] == "FRESH"
     assert position["last_price"] is not None
     assert position["market_value"] is not None
+    assert position["price_source"] == "test-seed"
+    assert position["price_age_seconds"] is not None
+    assert 0 <= position["price_age_seconds"] < 900
 
     portfolio = client.get(f"/v1/portfolios/{portfolio_id}", cookies=cookies).json()
     assert portfolio["market_data_status"] == "FRESH"
     assert portfolio["has_unavailable_positions"] is False
     assert portfolio["market_data_as_of"] is not None
+    assert portfolio["stale_position_count"] == 0
+    assert portfolio["unavailable_position_count"] == 0
 
 
 def test_position_status_stale_is_shown_as_reference_value_and_included_in_total(db):
@@ -66,12 +71,16 @@ def test_position_status_stale_is_shown_as_reference_value_and_included_in_total
     assert position["price_status"] == "STALE"
     assert position["last_price"] is not None  # 참고값으로는 여전히 보여준다
     assert position["market_value"] is not None
+    assert position["price_source"] == "test-seed"
+    assert position["price_age_seconds"] >= 1000  # STALE_AS_OF만큼 오래됨
 
     portfolio = client.get(f"/v1/portfolios/{portfolio_id}", cookies=cookies).json()
     assert portfolio["market_data_status"] == "STALE"
     # STALE은 UNAVAILABLE이 아니므로 합계에 포함된다(0으로 계산되는 것과는 다름).
     assert Decimal(str(portfolio["positions_market_value"])) > 0
     assert portfolio["has_unavailable_positions"] is False
+    assert portfolio["stale_position_count"] == 1
+    assert portfolio["unavailable_position_count"] == 0
 
 
 def test_position_status_unavailable_excluded_from_total_but_not_zero(db):
@@ -92,10 +101,14 @@ def test_position_status_unavailable_excluded_from_total_but_not_zero(db):
     assert position["last_price"] is None
     assert position["market_value"] is None
     assert position["unrealized_pnl"] is None
+    assert position["price_source"] is None
+    assert position["price_age_seconds"] is None
 
     portfolio = client.get(f"/v1/portfolios/{portfolio_id}", cookies=cookies).json()
     assert portfolio["market_data_status"] == "UNAVAILABLE"
     assert portfolio["has_unavailable_positions"] is True
+    assert portfolio["stale_position_count"] == 0
+    assert portfolio["unavailable_position_count"] == 1
     # 이 종목의 가치가 0원으로 잡혀 총자산이 깎이지 않는다 — 그냥 평가액 계산에서
     # 빠질 뿐, 실제로 있던 현금(초기 가상현금 - 매수 비용)은 total_assets에
     # 그대로 남아 있어야 한다.
@@ -104,11 +117,51 @@ def test_position_status_unavailable_excluded_from_total_but_not_zero(db):
     performance = client.get(f"/v1/portfolios/{portfolio_id}/performance", cookies=cookies).json()
     assert performance["market_data_status"] == "UNAVAILABLE"
     assert performance["has_unavailable_positions"] is True
+    assert performance["stale_position_count"] == 0
+    assert performance["unavailable_position_count"] == 1
     # simple_return_pct는 total_assets(일부 종목 제외한 불완전한 값)를
     # total_deposited(항상 완전한 값)로 나누므로, UNAVAILABLE 포지션이 있을 때
     # 이 값을 그대로 노출하면 완전한 수익률처럼 보이는 왜곡이 생긴다 — null이어야 한다.
     assert performance["performance_complete"] is False
     assert performance["simple_return_pct"] is None
+
+
+def test_portfolio_counts_match_number_of_badges_in_positions_list(db):
+    """stale_position_count/unavailable_position_count는 positions 응답에서
+    사용자가 직접 price_status 배지를 세었을 때 나오는 개수와 항상 일치해야
+    한다 — 두 응답이 서로 다른 숫자를 말하면 신뢰할 수 없는 API가 된다."""
+    cookies, portfolio_id = signup_user("mdstatus-counts")
+    fresh = seed_instrument_with_bar(db, "TESTMFC1", "NASDAQ", "USD", close=100)
+    stale = seed_instrument_with_bar(db, "TESTMFC2", "NASDAQ", "USD", close=100)
+    unavail = seed_instrument_with_bar(db, "TESTMFC3", "NASDAQ", "USD", close=100)
+
+    from app.domain.market import Bar
+
+    for inst in (stale, unavail):
+        bar = db.query(Bar).filter(Bar.instrument_id == inst.id).first()
+        bar.as_of = datetime.now(timezone.utc)
+        db.commit()
+
+    for inst in (fresh, stale, unavail):
+        _buy(cookies, portfolio_id, inst.id)
+
+    db.query(Bar).filter(Bar.instrument_id == stale.id).update({"as_of": STALE_AS_OF})
+    db.query(Bar).filter(Bar.instrument_id == unavail.id).delete()
+    db.commit()
+
+    positions = client.get(f"/v1/portfolios/{portfolio_id}/positions", cookies=cookies).json()
+    counted_stale = sum(1 for p in positions if p["price_status"] == "STALE")
+    counted_unavailable = sum(1 for p in positions if p["price_status"] == "UNAVAILABLE")
+    assert counted_stale == 1
+    assert counted_unavailable == 1
+
+    portfolio = client.get(f"/v1/portfolios/{portfolio_id}", cookies=cookies).json()
+    assert portfolio["stale_position_count"] == counted_stale
+    assert portfolio["unavailable_position_count"] == counted_unavailable
+
+    performance = client.get(f"/v1/portfolios/{portfolio_id}/performance", cookies=cookies).json()
+    assert performance["stale_position_count"] == counted_stale
+    assert performance["unavailable_position_count"] == counted_unavailable
 
 
 def test_performance_complete_true_when_only_fresh_and_stale(db):

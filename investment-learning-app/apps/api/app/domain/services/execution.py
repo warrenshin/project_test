@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session as DbSession
 
 from app.domain.constants import (
     ACCOUNT_CASH,
+    BAR_INTERVAL_DAILY,
     ENTRY_BUY_TRADE,
     ENTRY_SELL_TRADE,
     EXCHANGE_MARKET_MAP,
@@ -27,6 +28,7 @@ from app.domain.constants import (
     ORDER_ACCEPTED,
     ORDER_FILLED,
     PRICE_STATUS_FRESH,
+    SUPPORTED_BAR_INTERVALS,
 )
 from app.domain.market import Bar, Instrument
 from app.domain.policy import FeePolicy, FxRate
@@ -73,6 +75,7 @@ class ExecutionQuote:
     fx_rate: Decimal | None
     cash_impact_portfolio_ccy: Decimal  # BUY: 음수(현금 감소), SELL: 양수(현금 증가)
     bar_as_of: datetime
+    bar_source: str
     policy_version: str
 
 
@@ -83,10 +86,19 @@ def get_market(instrument: Instrument) -> str:
     return market
 
 
-def get_latest_bar(db: DbSession, instrument_id) -> Bar | None:
+def get_latest_bar(db: DbSession, instrument_id, *, interval: str) -> Bar | None:
+    """지정한 interval의 최신 bar만 반환한다 — 기본값을 두지 않는다. 호출자가
+
+    interval을 명시하지 않으면 서로 다른 주기(예: 1d/1m)의 bar가 bar_start만으로
+    비교되어 더 최근 시각을 가진 다른 interval의 bar가 "최신 bar"로 잘못 선택될
+    수 있다(주문 체결가·포트폴리오 평가가 오염되는 실제 위험). 요청한 interval의
+    데이터가 없으면 다른 interval로 대체하지 않고 None을 반환한다.
+    """
+    if interval not in SUPPORTED_BAR_INTERVALS:
+        raise ValueError(f"지원하지 않는 interval입니다: {interval!r}")
     return (
         db.query(Bar)
-        .filter(Bar.instrument_id == instrument_id)
+        .filter(Bar.instrument_id == instrument_id, Bar.interval == interval)
         .order_by(Bar.bar_start.desc())
         .first()
     )
@@ -148,11 +160,19 @@ def build_quote(
     limit_price: Decimal | None,
     staleness_threshold_seconds: int,
 ) -> ExecutionQuote:
-    bar = get_latest_bar(db, instrument.id)
+    bar = get_latest_bar(db, instrument.id, interval=BAR_INTERVAL_DAILY)
     if bar is None:
         raise NoMarketDataError("해당 종목의 시세 데이터가 없습니다.")
 
-    if classify_price_freshness(bar.as_of, staleness_threshold_seconds) != PRICE_STATUS_FRESH:
+    try:
+        freshness = classify_price_freshness(bar.as_of, staleness_threshold_seconds)
+    except ValueError as exc:
+        # as_of가 미래 시각이거나 timezone-naive면 신뢰할 수 없는 시세다 —
+        # STALE과 동일하게 주문을 거부한다(신뢰할 수 없는 시각을 FRESH로 보고
+        # 체결하는 것보다 안전하다).
+        raise StaleMarketDataError(f"시세 기준시각을 신뢰할 수 없습니다: {exc}") from exc
+
+    if freshness != PRICE_STATUS_FRESH:
         raise StaleMarketDataError(
             f"시세가 오래되었습니다 (기준시각 {bar.as_of.isoformat()}). 주문을 거부합니다."
         )
@@ -205,6 +225,7 @@ def build_quote(
         fx_rate=fx_rate,
         cash_impact_portfolio_ccy=cash_impact,
         bar_as_of=bar.as_of,
+        bar_source=bar.source,
         policy_version=f"{market}:{policy.version}",
     )
 
@@ -293,6 +314,7 @@ def execute_order(
         slippage=Decimal(0),
         realized_pnl=realized_pnl,
         market_data_as_of=quote.bar_as_of,
+        market_data_source=quote.bar_source,
         filled_at=now,
     )
     db.add(fill)
