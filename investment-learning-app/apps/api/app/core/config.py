@@ -48,6 +48,25 @@ class Settings(BaseSettings):
     overtrading_window_hours: int = 24
     overtrading_order_threshold: int = 5
 
+    # --- 6~15강 교육 콘텐츠용 "예시" 참고 수치 (실제 수수료·세율·시장운영시간이
+    # 아니다) ---
+    # 수수료·세금·환율(9강), 장 운영시간(6강)처럼 실제로는 증권사·상품·시점마다
+    # 다르고 자주 바뀌는 값을, 강의 본문 텍스트에 하드코딩하지 않고 여기 설정으로
+    # 분리해 둔다 — 값이 바뀌면 콘텐츠를 다시 쓰지 않고 이 설정만 갱신하면 된다.
+    # 강의 시드 마이그레이션이 이 값을 읽어 "예시 계산" 문단에 반영한다.
+    # 실제 수수료·세율이 아니라 계산 연습용 가정치라는 점을 각 강의 본문에도
+    # 명시한다.
+    education_example_fee_rate_pct: str = "0.015"
+    education_example_domestic_tax_rate_pct: str = "0.18"
+    education_example_fx_spread_pct: str = "1.0"
+    # 정규장 시간(09:00~15:30 KST, 09:30~16:00 ET)은 여러 공개 자료에서 일관되게
+    # 확인되는 안정적인 값이라 여기 반영한다. 다만 프리마켓·애프터마켓 등 확장
+    #거래시간의 정확한 시각은 2026년 기준 제도 개편이 진행 중이라(자료마다 세부
+    # 시각이 엇갈림) 여기 설정에 넣지 않고, 강의 본문에서 "공식 공지 확인 필요"로만
+    # 안내한다 — 이 강의가 DRAFT/REVIEW_REQUIRED로 남아있는 이유이기도 하다.
+    kr_market_regular_session: str = "09:00~15:30 (KST)"
+    us_market_regular_session: str = "09:30~16:00 (ET)"
+
     # AI 코치 (7.5-7.7). 키가 없으면 규칙 기반 graceful degradation 경로로 동작한다 (7.7).
     anthropic_api_key: str | None = None
     ai_coach_simple_model: str = "claude-haiku-4-5"

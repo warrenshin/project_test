@@ -9,7 +9,7 @@
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,6 +18,15 @@ from app.domain.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 CONTENT_DRAFT = "DRAFT"
 CONTENT_PUBLISHED = "PUBLISHED"
 CONTENT_ARCHIVED = "ARCHIVED"
+
+# review_status는 status(공개 여부 게이트)와 별개인 "제작 검수" 단계다. status가
+# PUBLISHED가 아니면 review_status와 무관하게 항상 비공개다 — review_status만으로
+# 콘텐츠가 노출되지는 않는다(9.4강 시장운영시간/수수료처럼 정확성 검수가 더 필요한
+# 강의를 구분해 두기 위한 값일 뿐).
+REVIEW_DRAFT = "DRAFT"
+REVIEW_REQUIRED = "REVIEW_REQUIRED"
+REVIEW_REVIEWED = "REVIEWED"
+REVIEW_PUBLISHED = "PUBLISHED"
 
 
 class LearningPath(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -51,8 +60,17 @@ class Module(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 class Lesson(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "lessons"
+    __table_args__ = (
+        # code는 신규(6강 이후) 강의부터 쓰는 안정적 식별자다 — UUID처럼 재생성 시
+        # 바뀌지 않아 challenge_missions.config·문서·테스트에서 안전하게 참조할 수
+        # 있다. 기존 1~5강·7일 챌린지 카드 강의는 code가 없다(NULL) — 부분 unique
+        # index라 NULL은 제약 대상이 아니다(이 저장소의 Instrument ticker+exchange
+        # unique index와 동일한 패턴).
+        Index("uq_lessons_code", "code", unique=True, postgresql_where=text("code IS NOT NULL")),
+    )
 
     module_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("modules.id"), nullable=False)
+    code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str] = mapped_column(String(128), nullable=False)
     learning_objective: Mapped[str | None] = mapped_column(Text, nullable=True)
     estimated_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
@@ -61,6 +79,14 @@ class Lesson(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     source: Mapped[str | None] = mapped_column(String(256), nullable=True)
     reviewed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     reviewed_at: Mapped[date | None] = mapped_column(nullable=True)
+    # 아래 5개는 6강 이후 콘텐츠부터 채운다(기존 1~5강·챌린지 카드 강의는 전부
+    # NULL로 남는다 — 소급 채움 없이 하위호환). source_url/source_confirmed_at은
+    # "기준일과 출처"를 콘텐츠 본문과 분리해 관리하기 위함이다(9.4강 원칙).
+    source_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_confirmed_at: Mapped[date | None] = mapped_column(nullable=True)
+    content_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    market_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)  # 예: KR/US/GLOBAL
+    review_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class ContentBlock(Base, UUIDPrimaryKeyMixin):
@@ -78,6 +104,10 @@ class Quiz(Base, UUIDPrimaryKeyMixin):
     lesson_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("lessons.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(128), nullable=False)
     pass_score_pct: Mapped[Numeric] = mapped_column(Numeric(5, 2), nullable=False, default=70)
+    # 문항 버전 표시용. 기존 QuizAttempt는 제출 시점의 score_pct/passed를 그대로
+    # 저장하므로(다시 채점하지 않음), 이후 문항을 고쳐 이 버전을 올려도 과거
+    # 응시 기록은 무효화되지 않는다.
+    content_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
 
 class Question(Base, UUIDPrimaryKeyMixin):
@@ -97,6 +127,9 @@ class Choice(Base, UUIDPrimaryKeyMixin):
     label: Mapped[str] = mapped_column(Text, nullable=False)
     is_correct: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # 오답별 설명(왜 이 선택지가 틀렸는지/맞았는지) — 채점 후 응답에만 노출한다.
+    # 기존 1~5강 문항은 NULL로 남아 있어도 무방하다(질문 단위 explanation으로 대체).
+    explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class LessonProgress(Base, UUIDPrimaryKeyMixin):

@@ -172,10 +172,11 @@ npm run start   # next start — production 서버
 
 ### Migration과 seed
 
-- Alembic 마이그레이션(`apps/api/alembic/versions/`)에 학습 콘텐츠(1~5강),
-  퀴즈, 데모 종목 4개(삼성전자/SK하이닉스/AAPL/MSFT), 수수료 정책 시드가 함께
-  들어 있다 — 별도 seed 스크립트가 아니라 `alembic upgrade head` 한 번으로
-  스키마와 초기 데이터가 함께 반영된다.
+- Alembic 마이그레이션(`apps/api/alembic/versions/`)에 학습 콘텐츠(1~5강 +
+  6~15강 — 8개 PUBLISHED, 2개는 DRAFT로 비공개. `docs/features/investment-lessons-06-15.md`
+  참고), 퀴즈, 데모 종목 4개(삼성전자/SK하이닉스/AAPL/MSFT), 수수료 정책
+  시드가 함께 들어 있다 — 별도 seed 스크립트가 아니라 `alembic upgrade head`
+  한 번으로 스키마와 초기 데이터가 함께 반영된다.
 - 이미 최신 상태인 DB에 다시 `alembic upgrade head`를 실행해도 안전하다 —
   Alembic이 DB에 저장된 현재 리비전을 보고 이미 적용된 마이그레이션은
   건너뛰므로, 콘텐츠나 종목이 중복 생성되지 않는다. 기존 사용자·일지·
@@ -332,8 +333,10 @@ CI 워크플로도 매 실행 끝에 이 명령을 쓰지만, 그건 CI 러너 �
       샌드박스 egress 정책상 검증하지 못함** — 지금은 데모용 정적 샘플 4종목만 조회
       가능 (`services/market-data-worker/README.md` 참고, 운영 투입 전 재검증 필요)
 - [x] Phase 2 핵심: 학습 엔진 (콘텐츠 계층, 진도, 퀴즈 채점, 서버 계산 XP·연속학습일).
-      1~5강 시드 완료, 6~30강 콘텐츠 작성과 챌린지/배지는 후속 작업으로 남음
-      (`content/courses/README.md` 참고)
+      1~15강 시드 완료(6~15강 중 8개 PUBLISHED·2개 DRAFT — 시장운영시간·수수료/세금은
+      검수 후 공개 예정. `docs/features/investment-lessons-06-15.md` 참고), 16~30강
+      콘텐츠 작성은 후속 작업으로 남음. 7일 챌린지·과정 중심 배지는 구현 완료
+      (`docs/features/seven-day-challenge.md` 참고)
 - [x] Phase 4 핵심: 투자일지(거래 전/후, 버전 보존)·과정 점수(7.3)·행동편향 탐지 3종
       (확증편향·처분효과·집중위험)·AI 코치 파이프라인(검색→정량엔진→LLM→정책필터→출처
       표시). **단, `ANTHROPIC_API_KEY`가 이 개발 세션에 설정되어 있지 않아 실제 LLM

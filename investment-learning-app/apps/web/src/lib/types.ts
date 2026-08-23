@@ -5,6 +5,7 @@ export interface UserResponse {
 
 export interface LessonSummary {
   id: string;
+  code: string | null;
   title: string;
   estimated_minutes: number;
   order_index: number;
@@ -44,6 +45,7 @@ export interface QuizSummary {
   title: string;
   question_count: number;
   pass_score_pct: number;
+  content_version: string | null;
 }
 
 export interface LessonProgressResponse {
@@ -53,14 +55,22 @@ export interface LessonProgressResponse {
 
 export interface LessonDetailResponse {
   id: string;
+  code: string | null;
   title: string;
   learning_objective: string | null;
   estimated_minutes: number;
   source: string | null;
   reviewed_by: string | null;
+  reviewed_at: string | null;
+  source_url: string | null;
+  source_confirmed_at: string | null;
+  content_version: string | null;
+  market_scope: string | null;
+  review_status: string | null;
   content_blocks: ContentBlockResponse[];
   quiz: QuizSummary | null;
   progress: LessonProgressResponse | null;
+  disclosure: string;
 }
 
 export interface QuizChoice {
@@ -82,10 +92,18 @@ export interface QuizDetailResponse {
   questions: QuizQuestion[];
 }
 
+export interface ChoiceFeedback {
+  choice_id: string;
+  label: string;
+  is_correct: boolean;
+  explanation: string | null;
+}
+
 export interface QuestionResult {
   question_id: string;
   correct: boolean;
   explanation: string | null;
+  choice_feedback: ChoiceFeedback[];
 }
 
 export interface QuizAttemptResponse {

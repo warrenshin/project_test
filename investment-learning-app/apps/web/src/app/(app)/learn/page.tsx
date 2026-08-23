@@ -33,6 +33,7 @@ export default function LearnPage() {
                 )}
                 {course.modules.map((mod) => (
                   <div key={mod.id} className="stack">
+                    <h3 style={{ fontSize: 14, margin: "8px 0 0" }}>{mod.title}</h3>
                     {mod.lessons.map((lesson) => (
                       <Link
                         key={lesson.id}
