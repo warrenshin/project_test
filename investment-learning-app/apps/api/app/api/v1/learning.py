@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session as DbSession
 
 from app.api.v1.learning_schemas import (
+    ChoiceFeedback,
     ContentBlockResponse,
     CourseSummary,
     LearningPathResponse,
@@ -92,6 +93,7 @@ def list_learning_paths(db: DbSession = Depends(get_db)):
                         lessons=[
                             LessonSummary(
                                 id=lesson.id,
+                                code=lesson.code,
                                 title=lesson.title,
                                 estimated_minutes=lesson.estimated_minutes,
                                 order_index=lesson.order_index,
@@ -137,7 +139,8 @@ def get_lesson(
     if quiz is not None:
         question_count = db.query(Question).filter(Question.quiz_id == quiz.id).count()
         quiz_summary = QuizSummary(
-            id=quiz.id, title=quiz.title, question_count=question_count, pass_score_pct=quiz.pass_score_pct
+            id=quiz.id, title=quiz.title, question_count=question_count, pass_score_pct=quiz.pass_score_pct,
+            content_version=quiz.content_version,
         )
 
     progress_row = (
@@ -153,11 +156,18 @@ def get_lesson(
 
     return LessonDetailResponse(
         id=lesson.id,
+        code=lesson.code,
         title=lesson.title,
         learning_objective=lesson.learning_objective,
         estimated_minutes=lesson.estimated_minutes,
         source=lesson.source,
         reviewed_by=lesson.reviewed_by,
+        reviewed_at=lesson.reviewed_at,
+        source_url=lesson.source_url,
+        source_confirmed_at=lesson.source_confirmed_at,
+        content_version=lesson.content_version,
+        market_scope=lesson.market_scope,
+        review_status=lesson.review_status,
         content_blocks=[ContentBlockResponse.model_validate(b, from_attributes=True) for b in blocks],
         quiz=quiz_summary,
         progress=progress,
@@ -202,13 +212,28 @@ def update_lesson_progress(
     return LessonProgressUpdateResponse(status=progress.status, completed_at=progress.completed_at, xp_awarded=xp_awarded)
 
 
+def _get_quiz_of_published_lesson(db: DbSession, quiz_id: UUID) -> Quiz:
+    """퀴즈 id를 안다고 해서 아직 게시되지 않은(READY_FOR_REVIEW 등) 강의의
+    문항·선택지·정답을 볼 수 있으면 안 된다 — get_lesson이 이미 하는
+    `status == PUBLISHED` 게이트를 퀴즈 경로에도 동일하게 적용한다. 강의를
+    찾을 수 없는 경우와 완전히 같은 404로 응답해 존재 여부 자체를 드러내지
+    않는다."""
+    quiz = (
+        db.query(Quiz)
+        .join(Lesson, Quiz.lesson_id == Lesson.id)
+        .filter(Quiz.id == quiz_id, Lesson.status == CONTENT_PUBLISHED)
+        .first()
+    )
+    if quiz is None:
+        raise HTTPException(status_code=404, detail="퀴즈를 찾을 수 없습니다.")
+    return quiz
+
+
 @router.get("/quizzes/{quiz_id}", response_model=QuizDetailResponse)
 def get_quiz(quiz_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """퀴즈 문항 조회. 명세서 9.2에 명시적 엔드포인트는 없지만, 클라이언트가 채점 전 문항을
     렌더링하려면 필요하다. 정답 여부(Choice.is_correct)는 응답에 포함하지 않는다."""
-    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
-    if quiz is None:
-        raise HTTPException(status_code=404, detail="퀴즈를 찾을 수 없습니다.")
+    quiz = _get_quiz_of_published_lesson(db, quiz_id)
 
     questions = db.query(Question).filter(Question.quiz_id == quiz.id).order_by(Question.order_index).all()
     question_responses = []
@@ -226,7 +251,7 @@ def get_quiz(quiz_id: UUID, db: DbSession = Depends(get_db), current_user: User 
         )
 
     return QuizDetailResponse(
-        id=quiz.id, title=quiz.title, pass_score_pct=quiz.pass_score_pct, questions=question_responses
+        id=quiz.id, title=quiz.title, pass_score_pct=quiz.pass_score_pct, questions=question_responses,
     )
 
 
@@ -237,9 +262,7 @@ def submit_quiz_attempt(
     db: DbSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
-    if quiz is None:
-        raise HTTPException(status_code=404, detail="퀴즈를 찾을 수 없습니다.")
+    quiz = _get_quiz_of_published_lesson(db, quiz_id)
 
     questions = db.query(Question).filter(Question.quiz_id == quiz.id).order_by(Question.order_index).all()
     if not questions:
@@ -248,14 +271,23 @@ def submit_quiz_attempt(
     results: list[QuestionResult] = []
     correct_count = 0
     for question in questions:
-        correct_choice_ids = {
-            c.id for c in db.query(Choice).filter(Choice.question_id == question.id, Choice.is_correct.is_(True))
-        }
+        choices = db.query(Choice).filter(Choice.question_id == question.id).order_by(Choice.order_index).all()
+        correct_choice_ids = {c.id for c in choices if c.is_correct}
         submitted = set(payload.answers.get(question.id, []))
         is_correct = submitted == correct_choice_ids
         if is_correct:
             correct_count += 1
-        results.append(QuestionResult(question_id=question.id, correct=is_correct, explanation=question.explanation))
+        results.append(
+            QuestionResult(
+                question_id=question.id, correct=is_correct, explanation=question.explanation,
+                # 채점이 끝난 뒤에만 오답별 설명·정답 여부를 함께 보여준다(사전 조회
+                # 시점인 QuizDetailResponse에는 절대 포함하지 않는다).
+                choice_feedback=[
+                    ChoiceFeedback(choice_id=c.id, label=c.label, is_correct=c.is_correct, explanation=c.explanation)
+                    for c in choices
+                ],
+            )
+        )
 
     score_pct = (correct_count / len(questions)) * 100
     passed = score_pct >= float(quiz.pass_score_pct)

@@ -6,14 +6,37 @@ import { getLesson, getQuiz, submitQuizAttempt, updateLessonProgress } from "@/l
 import { ApiError } from "@/lib/api";
 import { useAsync } from "@/lib/useAsync";
 import { LoadingBlock, ErrorBlock } from "@/components/States";
-import type { QuizAttemptResponse, QuizDetailResponse } from "@/lib/types";
+import type { QuizAttemptResponse, QuizChoice, QuizDetailResponse } from "@/lib/types";
 
 const BLOCK_LABEL: Record<string, string> = {
   OBJECTIVE: "학습 목표",
   BODY: "본문",
   EXAMPLE: "예시",
-  SUMMARY: "요약",
+  MISCONCEPTION: "흔한 오해",
+  SUMMARY: "핵심 요약",
+  SELF_CHECK: "스스로 확인하기",
+  TERMS: "관련 용어",
+  PRACTICE: "관련 실습",
+  SOURCE: "출처",
 };
+
+const MARKET_SCOPE_LABEL: Record<string, string> = {
+  KR: "한국",
+  US: "미국",
+  KR_US: "한국·미국",
+  GLOBAL: "공통",
+};
+
+/** 매번 같은 순서로 외워서 풀지 않도록, 문항이 바뀔 때마다 선택지 표시 순서를
+ * 섞는다(정답 데이터 자체는 서버가 관리하므로 여기서는 표시 순서만 바꾼다). */
+function shuffled<T>(items: T[]): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
 
 export default function LessonDetailPage({ params }: { params: Promise<{ lessonId: string }> }) {
   const { lessonId } = use(params);
@@ -30,6 +53,10 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<QuizAttemptResponse | null>(null);
+
+  // 문항별 선택지 표시 순서 — 퀴즈를 새로 시작할 때 한 번만 섞고 유지한다
+  // (제출·재렌더링 중간에 순서가 계속 바뀌면 답을 고르기 어려워지므로).
+  const [choiceOrder, setChoiceOrder] = useState<Record<string, QuizChoice[]>>({});
 
   async function handleComplete() {
     setCompleting(true);
@@ -53,6 +80,9 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
     try {
       const data = await getQuiz(quizId);
       setQuiz(data);
+      const order: Record<string, QuizChoice[]> = {};
+      for (const q of data.questions) order[q.id] = shuffled(q.choices);
+      setChoiceOrder(order);
     } catch (err) {
       setQuizError(err instanceof ApiError ? err.message : "퀴즈를 불러오지 못했습니다.");
     } finally {
@@ -90,10 +120,19 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
         ← 학습 목록
       </Link>
       <h1>{data.title}</h1>
-      {data.learning_objective && <p className="muted">{data.learning_objective}</p>}
+      {data.learning_objective && (
+        <p className="muted" style={{ whiteSpace: "pre-wrap" }}>{data.learning_objective}</p>
+      )}
       <div className="row" style={{ flexWrap: "wrap" }}>
         <span className="badge badge-virtual">예상 {data.estimated_minutes}분</span>
+        {data.market_scope && (
+          <span className="badge badge-virtual">{MARKET_SCOPE_LABEL[data.market_scope] ?? data.market_scope}</span>
+        )}
         {data.progress?.status === "COMPLETED" && <span className="badge badge-virtual">완료함</span>}
+      </div>
+
+      <div className="banner banner-info" role="note">
+        {data.disclosure}
       </div>
 
       {data.content_blocks.length === 0 ? (
@@ -113,7 +152,14 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
       )}
 
       {data.source && (
-        <p className="muted">출처: {data.source}{data.reviewed_by ? ` · 감수: ${data.reviewed_by}` : ""}</p>
+        <p className="muted">
+          출처: {data.source_url ? <a href={data.source_url} target="_blank" rel="noreferrer">{data.source}</a> : data.source}
+          {data.source_confirmed_at ? ` · 확인일 ${data.source_confirmed_at}` : ""}
+          {data.reviewed_by ? ` · 감수: ${data.reviewed_by}` : ""}
+        </p>
+      )}
+      {data.review_status && data.review_status !== "REVIEWED" && data.review_status !== "PUBLISHED" && (
+        <p className="muted">검수 상태: {data.review_status}</p>
       )}
 
       <div className="card">
@@ -148,7 +194,7 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
                 <div key={q.id} className="stack">
                   <strong>{qi + 1}. {q.prompt}</strong>
                   <div className="stack">
-                    {q.choices.map((c) => (
+                    {(choiceOrder[q.id] ?? q.choices).map((c) => (
                       <label key={c.id} className="row" style={{ fontWeight: 400 }}>
                         <input
                           type="radio"
@@ -184,6 +230,20 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
                       {qi + 1}. {q.prompt} — {r?.correct ? "정답" : "오답"}
                     </p>
                     {r?.explanation && <p className="muted" style={{ margin: "4px 0 0" }}>{r.explanation}</p>}
+                    {r && r.choice_feedback.length > 0 && (
+                      <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+                        {r.choice_feedback.map((cf) => (
+                          <li key={cf.choice_id} style={{ marginBottom: 4 }}>
+                            <span style={{ fontWeight: cf.is_correct ? 700 : 400 }}>
+                              {cf.label} {cf.is_correct ? "(정답)" : ""}
+                            </span>
+                            {cf.explanation && (
+                              <p className="muted" style={{ margin: "2px 0 0" }}>{cf.explanation}</p>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 );
               })}
