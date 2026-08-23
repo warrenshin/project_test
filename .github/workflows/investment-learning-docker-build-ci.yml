@@ -170,16 +170,18 @@ jobs:
           bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:8000/health/ready "API /health/ready" 60
           bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://localhost:3000/api/health "Web /api/health" 120
 
-      - name: 최초 실행 시드 데이터 확인 (1~5강 + 7일 챌린지 카드 3개, 데모 종목)
+      - name: 최초 실행 시드 데이터 확인 (1~5강 + 7일 챌린지 카드 3개 + 6~15강, 데모 종목)
         run: |
           set -euo pipefail
           docker compose exec -T api python -m scripts.count_seed_rows | tee /tmp/seed-counts-before.json
           python3 -c "
           import json
           d = json.load(open('/tmp/seed-counts-before.json'))
-          assert d['lessons'] == 8, f'lessons expected 8 (1~5강 5개 + 7일 챌린지 카드 3개), got {d}'
+          # 18 = 1~5강 5개 + 7일 챌린지 카드 3개 + 6~15강 10개(8개 PUBLISHED +
+          # 2개 DRAFT — DRAFT도 DB 행 자체는 존재하고 API로만 비노출된다).
+          assert d['lessons'] == 18, f'lessons expected 18 (1~5강 5개 + 챌린지 카드 3개 + 6~15강 10개), got {d}'
           assert d['instruments'] >= 4, f'instruments expected >=4, got {d}'
-          print('시드 확인 OK: lessons=8, instruments>=4')
+          print('시드 확인 OK: lessons=18, instruments>=4')
           "
 
       - name: Smoke test (최초 실행)
