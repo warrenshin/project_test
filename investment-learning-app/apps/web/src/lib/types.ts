@@ -266,9 +266,43 @@ export interface BiasObservation {
   coaching_direction: string;
 }
 
+/** 7종 편향 전체(감지 여부 무관)를 담는 신호 하나. "진단"이 아니라 "관찰된
+ * 신호"로만 표시한다 — severity/evidence_strength는 근거의 강도일 뿐 사용자에
+ * 대한 판정이 아니다. */
+export interface BiasSignal {
+  id: string | null;
+  bias_code: string;
+  display_name: string;
+  rule_version: string;
+  detected: boolean;
+  severity: "LOW" | "MEDIUM" | "HIGH" | null;
+  evidence_strength: number | null;
+  sample_size: number;
+  minimum_sample_size: number;
+  data_sufficiency: "SUFFICIENT" | "INSUFFICIENT" | "MARKET_DATA_UNAVAILABLE";
+  window_start: string | null;
+  window_end: string | null;
+  description: string;
+  coaching_direction: string;
+  evidence_summary: string;
+  limitations: string;
+  self_check_questions: string[];
+  related_lesson_id: string | null;
+  detected_at: string | null;
+  acknowledged_at: string | null;
+}
+
 export interface BiasReportResponse {
   observations: BiasObservation[];
+  biases: BiasSignal[];
+  top_signals: string[];
   note: string;
+}
+
+export interface BiasAcknowledgeResponse {
+  id: string;
+  bias_code: string;
+  acknowledged_at: string;
 }
 
 export interface ApiErrorBody {

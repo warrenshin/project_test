@@ -1,6 +1,7 @@
 import type {
   BadgeDefinitionResponse,
   BarResponse,
+  BiasAcknowledgeResponse,
   BiasReportResponse,
   ChallengeDetailResponse,
   ChallengeSummary,
@@ -241,6 +242,10 @@ export const getJournalCoaching = (journalId: string) =>
   request<JournalCoachingResponse>(`/v1/journals/${journalId}/coaching`);
 
 export const getBiasReport = () => request<BiasReportResponse>("/v1/me/bias-report");
+
+/** 편향 "판정에 동의"하는 게 아니라, 관련 교육 콘텐츠를 확인했다는 의미다. */
+export const acknowledgeBiasEvent = (biasEventId: string) =>
+  request<BiasAcknowledgeResponse>(`/v1/me/bias-events/${biasEventId}/acknowledge`, { method: "POST" });
 
 // --- 7일 학습 챌린지 · 배지 ---
 export const getChallenges = () => request<ChallengeSummary[]>("/v1/challenges");

@@ -39,6 +39,15 @@ class Settings(BaseSettings):
     # 주문 후 단일 종목 비중이 이 값(%)을 초과하면 집중도 경고를 반환한다 (차단하지 않음).
     concentration_warning_threshold_pct: int = 30
 
+    # 행동편향 탐지(7.4) 임계치. 추격매수: 매수 시점 기준 최근 며칠간 이 이상
+    # 급등했는데 진입 조건 없이 매수하면 후보로 본다. 과잉매매: 이 시간(시간)
+    # 이내에 이 건수 이상 주문하면 후보로 본다. 전부 "진단"이 아니라 코칭 방향을
+    # 잡기 위한 관찰 임계치이며, 운영 설정으로 조정 가능하다.
+    chasing_rally_lookback_days: int = 5
+    chasing_rally_gain_threshold_pct: int = 8
+    overtrading_window_hours: int = 24
+    overtrading_order_threshold: int = 5
+
     # AI 코치 (7.5-7.7). 키가 없으면 규칙 기반 graceful degradation 경로로 동작한다 (7.7).
     anthropic_api_key: str | None = None
     ai_coach_simple_model: str = "claude-haiku-4-5"

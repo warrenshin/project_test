@@ -11,8 +11,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session as DbSession
 
 from app.api.v1.journal_schemas import (
+    BiasAcknowledgeResponse,
     BiasObservation,
     BiasReportResponse,
+    BiasSignalResponse,
     CoachingSourceResponse,
     JournalCoachingResponse,
     JournalResponse,
@@ -22,6 +24,7 @@ from app.api.v1.journal_schemas import (
 )
 from app.core.db import get_db
 from app.core.deps import get_current_user
+from app.domain.bias import BiasEvent
 from app.domain.constants import BAR_INTERVAL_DAILY
 from app.domain.journal import JournalEntry, JournalVersion
 from app.domain.market import Instrument
@@ -202,5 +205,35 @@ def get_journal_coaching(
 
 @router.get("/me/bias-report", response_model=BiasReportResponse)
 def get_bias_report(db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    observations = coaching.detect_biases(db, current_user.id)
-    return BiasReportResponse(observations=[BiasObservation(**o) for o in observations])
+    signals = coaching.detect_biases(db, current_user.id)
+    db.commit()  # detect_biases가 새로 감지된 BiasEvent를 저장했을 수 있다
+
+    # 정렬은 coaching.detect_biases가 이미 결정론적으로 해 뒀다(감지 여부 ->
+    # 심각도 -> 근거 강도 -> 최근성 -> bias_code). 여기서는 그 순서를 그대로
+    # 유지한 채 상위 3개만 표시용으로 표시한다.
+    detected = [s for s in signals if s["detected"]]
+    return BiasReportResponse(
+        observations=[
+            BiasObservation(pattern=s["pattern"], description=s["description"], coaching_direction=s["coaching_direction"])
+            for s in detected
+        ],
+        biases=[BiasSignalResponse(**s) for s in signals],
+        top_signals=[s["bias_code"] for s in detected[:3]],
+    )
+
+
+@router.post("/me/bias-events/{bias_event_id}/acknowledge", response_model=BiasAcknowledgeResponse)
+def acknowledge_bias_event(
+    bias_event_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)
+):
+    """편향에 "동의"하는 게 아니라, 관련 교육 내용을 확인했다는 의미다 —
+    편향 판정 자체를 사용자가 승인·반박하는 기능이 아니다."""
+    event = db.query(BiasEvent).filter(BiasEvent.id == bias_event_id, BiasEvent.user_id == current_user.id).first()
+    if event is None:
+        # 존재 여부를 노출하지 않는다 — 다른 사용자의 것인지, 애초에 없는지 구분하지 않는다.
+        raise HTTPException(status_code=404, detail="편향 기록을 찾을 수 없습니다.")
+    if event.acknowledged_at is None:
+        event.acknowledged_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(event)
+    return BiasAcknowledgeResponse(id=event.id, bias_code=event.bias_code, acknowledged_at=event.acknowledged_at)

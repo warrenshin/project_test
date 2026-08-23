@@ -79,14 +79,51 @@ class JournalResponse(BaseModel):
 
 
 class BiasObservation(BaseModel):
+    """하위 호환 필드 — 기존 클라이언트가 쓰던 3개 필드 그대로다. 실제로
+    감지된(감지 안 됨/데이터 부족 제외) 패턴만 담는다."""
+
     pattern: str
     description: str
     coaching_direction: str
 
 
+class BiasSignalResponse(BaseModel):
+    """7종 편향 전체(감지 여부 무관)를 담는 확장 필드. 클라이언트가
+    severity·bias_code 등을 직접 지정할 수 없다 — 전부 서버 계산 값이다."""
+
+    id: UUID | None
+    bias_code: str
+    display_name: str
+    rule_version: str
+    detected: bool
+    severity: str | None
+    evidence_strength: float | None
+    sample_size: int
+    minimum_sample_size: int
+    data_sufficiency: str
+    window_start: datetime | None
+    window_end: datetime | None
+    description: str
+    coaching_direction: str
+    evidence_summary: str
+    limitations: str
+    self_check_questions: list[str]
+    related_lesson_id: UUID | None
+    detected_at: datetime | None
+    acknowledged_at: datetime | None
+
+
 class BiasReportResponse(BaseModel):
     observations: list[BiasObservation]
+    biases: list[BiasSignalResponse]
+    top_signals: list[str] = Field(default_factory=list)
     note: str = "행동편향은 의학적 진단이 아니라 관찰된 거래 패턴입니다."
+
+
+class BiasAcknowledgeResponse(BaseModel):
+    id: UUID
+    bias_code: str
+    acknowledged_at: datetime
 
 
 class CoachingSourceResponse(BaseModel):
