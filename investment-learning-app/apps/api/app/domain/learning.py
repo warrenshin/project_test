@@ -2,31 +2,58 @@
 
 계층: LearningPath > Course > Module > Lesson > (ContentBlock, Quiz>Question>Choice)
 
-콘텐츠 버전 관리·게시 승인 워크플로(6.2, 11.1)는 status 필드 수준으로만 지원한다
-(DRAFT/PUBLISHED/ARCHIVED) — 검수자·이전버전 복원 등 전체 CMS 워크플로는 관리자
-웹(apps/admin-web) 작업과 함께 후속으로 확장한다.
+콘텐츠 작성·검수·게시 워크플로(6.2, 11.1)는 두 개의 독립된 필드로 나눠 표현한다
+— 절대 서로를 대신하지 않는다:
+
+- `status`(작성/게시 상태): DRAFT -> READY_FOR_REVIEW -> PUBLISHED (-> ARCHIVED).
+  실제 공개 여부를 결정하는 유일한 게이트다 — API는 `status == PUBLISHED`인
+  강의만 노출한다(그 외 전부 비공개).
+- `review_status`(검수 상태): UNREVIEWED -> REVIEW_REQUIRED -> REVIEWED.
+  콘텐츠 정확성이 사람에 의해 확인됐는지만 나타낸다. `review_status`가
+  REVIEWED여도 `status`가 PUBLISHED가 아니면 여전히 비공개다 — 이 필드
+  단독으로는 아무것도 노출시키지 않는다.
+
+에이전트(자동화)가 새로 작성한 콘텐츠는 최대 READY_FOR_REVIEW까지만 시드한다.
+REVIEWED·PUBLISHED로의 전환은 반드시 사람(운영자)이
+`scripts/publish_lesson.py`를 통해 명시적으로 승인해야 한다 — 에이전트가
+스스로의 산출물을 REVIEWED/PUBLISHED로 자기 승인하지 않는다는 원칙을
+코드 수준에서 강제한다(그 스크립트가 검증하는 전제조건들 참고).
+
+검수자·이전버전 복원 등 전체 CMS 워크플로는 관리자 웹(apps/admin-web)
+작업과 함께 후속으로 확장한다 — 지금은 운영자 CLI(`scripts/publish_lesson.py`)
++ `lesson_review_audits` 감사기록으로 최소 승인 절차만 구현한다.
 """
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
+# --- status: 작성/게시 상태(공개 여부의 유일한 게이트) ---
 CONTENT_DRAFT = "DRAFT"
+CONTENT_READY_FOR_REVIEW = "READY_FOR_REVIEW"
 CONTENT_PUBLISHED = "PUBLISHED"
 CONTENT_ARCHIVED = "ARCHIVED"
 
-# review_status는 status(공개 여부 게이트)와 별개인 "제작 검수" 단계다. status가
-# PUBLISHED가 아니면 review_status와 무관하게 항상 비공개다 — review_status만으로
-# 콘텐츠가 노출되지는 않는다(9.4강 시장운영시간/수수료처럼 정확성 검수가 더 필요한
-# 강의를 구분해 두기 위한 값일 뿐).
-REVIEW_DRAFT = "DRAFT"
+# --- review_status: 검수 상태(공개 여부와 무관 — status가 별도로 PUBLISHED여야
+# 실제로 노출된다) ---
+REVIEW_UNREVIEWED = "UNREVIEWED"
 REVIEW_REQUIRED = "REVIEW_REQUIRED"
 REVIEW_REVIEWED = "REVIEWED"
-REVIEW_PUBLISHED = "PUBLISHED"
 
 
 class LearningPath(Base, UUIDPrimaryKeyMixin, TimestampMixin):
@@ -87,6 +114,30 @@ class Lesson(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     content_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
     market_scope: Mapped[str | None] = mapped_column(String(32), nullable=True)  # 예: KR/US/GLOBAL
     review_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+
+class LessonReviewAudit(Base, UUIDPrimaryKeyMixin):
+    """`scripts/publish_lesson.py`가 강의를 REVIEWED/PUBLISHED로 승인할 때마다
+    남기는 감사기록. (lesson_id, content_version, action) unique 제약이 같은
+    콘텐츠 버전에 대한 동일 승인 액션의 재실행을 멱등하게 만든다 — 이 저장소
+    전체에서 쓰는 SAVEPOINT + unique 제약 동시성 패턴과 동일하다."""
+
+    __tablename__ = "lesson_review_audits"
+    __table_args__ = (
+        UniqueConstraint(
+            "lesson_id", "content_version", "action", name="uq_lesson_review_audits_lesson_version_action"
+        ),
+    )
+
+    lesson_id: Mapped[str] = mapped_column(UUID(as_uuid=True), ForeignKey("lessons.id"), nullable=False)
+    lesson_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_version: Mapped[str] = mapped_column(String(16), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)  # 지금은 PUBLISHED만 씀
+    reviewer: Mapped[str] = mapped_column(String(128), nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ContentBlock(Base, UUIDPrimaryKeyMixin):

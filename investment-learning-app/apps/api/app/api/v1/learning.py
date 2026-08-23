@@ -212,13 +212,28 @@ def update_lesson_progress(
     return LessonProgressUpdateResponse(status=progress.status, completed_at=progress.completed_at, xp_awarded=xp_awarded)
 
 
+def _get_quiz_of_published_lesson(db: DbSession, quiz_id: UUID) -> Quiz:
+    """퀴즈 id를 안다고 해서 아직 게시되지 않은(READY_FOR_REVIEW 등) 강의의
+    문항·선택지·정답을 볼 수 있으면 안 된다 — get_lesson이 이미 하는
+    `status == PUBLISHED` 게이트를 퀴즈 경로에도 동일하게 적용한다. 강의를
+    찾을 수 없는 경우와 완전히 같은 404로 응답해 존재 여부 자체를 드러내지
+    않는다."""
+    quiz = (
+        db.query(Quiz)
+        .join(Lesson, Quiz.lesson_id == Lesson.id)
+        .filter(Quiz.id == quiz_id, Lesson.status == CONTENT_PUBLISHED)
+        .first()
+    )
+    if quiz is None:
+        raise HTTPException(status_code=404, detail="퀴즈를 찾을 수 없습니다.")
+    return quiz
+
+
 @router.get("/quizzes/{quiz_id}", response_model=QuizDetailResponse)
 def get_quiz(quiz_id: UUID, db: DbSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """퀴즈 문항 조회. 명세서 9.2에 명시적 엔드포인트는 없지만, 클라이언트가 채점 전 문항을
     렌더링하려면 필요하다. 정답 여부(Choice.is_correct)는 응답에 포함하지 않는다."""
-    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
-    if quiz is None:
-        raise HTTPException(status_code=404, detail="퀴즈를 찾을 수 없습니다.")
+    quiz = _get_quiz_of_published_lesson(db, quiz_id)
 
     questions = db.query(Question).filter(Question.quiz_id == quiz.id).order_by(Question.order_index).all()
     question_responses = []
@@ -247,9 +262,7 @@ def submit_quiz_attempt(
     db: DbSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
-    if quiz is None:
-        raise HTTPException(status_code=404, detail="퀴즈를 찾을 수 없습니다.")
+    quiz = _get_quiz_of_published_lesson(db, quiz_id)
 
     questions = db.query(Question).filter(Question.quiz_id == quiz.id).order_by(Question.order_index).all()
     if not questions:

@@ -43,15 +43,25 @@ def migration_cycle():
     command.upgrade(cfg, head_revision)
 
 
+NEW_LESSON_CODES = [f"lesson-{n:02d}" for n in range(6, 16)]
+
+
 def test_downgrade_then_upgrade_restores_all_ten_lessons(migration_cycle, db):
+    """이 migration이 관리하는 code 집합(lesson-06~15)만 확인한다 — 이 저장소의
+    테스트는 파일 간 DB를 롤백하지 않고 공유하므로, 다른 테스트 파일이 만든
+    무관한 code(예: 승인 CLI 테스트용 가짜 강의)가 같은 DB에 남아 있을 수
+    있다는 전제 위에서, "전체 DB에 code가 하나도 없다"처럼 과도하게 넓은
+    불변조건은 검사하지 않는다."""
     cfg = migration_cycle
-    assert db.query(Lesson).filter(Lesson.code.isnot(None)).count() == 0  # downgrade 직후
+    assert db.query(Lesson).filter(Lesson.code.in_(NEW_LESSON_CODES)).count() == 0  # downgrade 직후
 
     command.upgrade(cfg, TARGET_REVISION)
     db.expire_all()
 
-    codes = sorted(l.code for l in db.query(Lesson).filter(Lesson.code.isnot(None)).all())
-    assert codes == [f"lesson-{n:02d}" for n in range(6, 16)]
+    codes = sorted(
+        l.code for l in db.query(Lesson).filter(Lesson.code.in_(NEW_LESSON_CODES)).all()
+    )
+    assert codes == NEW_LESSON_CODES
 
 
 def test_downgrade_preserves_existing_lessons_and_progress(migration_cycle, db):

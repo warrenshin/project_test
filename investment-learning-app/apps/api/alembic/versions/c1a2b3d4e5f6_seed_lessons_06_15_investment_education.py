@@ -14,10 +14,14 @@ Create Date: 2026-08-23T00:10:00.000000
   넣지 않고 app.core.config.Settings의 교육용 예시값을 읽어 채운다(이 값을
   나중에 바꾸면 콘텐츠를 다시 쓰지 않고 재시드만 하면 된다) — 그리고 실제
   수수료·세율이 아닌 "가정치"임을 본문에 명시한다.
-- 정확성이 사실상 안정적인 개념 강의(7·8·10~15강)만 PUBLISHED로 시드한다.
-  시장운영시간(6강)·수수료와 세금(9강)처럼 검증에 더 시간이 걸리는 강의는
-  DRAFT/REVIEW_REQUIRED로 남겨 운영 앱에 노출되지 않게 한다 — 검수 후
-  PUBLISHED로 승격하는 절차는 docs/features/investment-lessons-06-15.md 참고.
+- 에이전트가 작성한 콘텐츠는 스스로 최종 승인하지 않는다: 10개 강의 전부
+  status=READY_FOR_REVIEW, review_status=REVIEW_REQUIRED로만 시드하고,
+  reviewed_by/reviewed_at/source_confirmed_at은 전부 NULL로 둔다(개념이
+  비교적 안정적인 강의라도 사람이 직접 검수하지 않았다는 사실은 다르지
+  않다). REVIEWED/PUBLISHED로의 전환은 사람 검수자가
+  scripts/publish_lesson.py를 통해서만 할 수 있다 — 검수 문서는
+  docs/content-review/lessons-06-15-review.md, 절차는
+  docs/features/investment-lessons-06-15.md 참고.
 - 이 migration은 멱등이다: lessons.code로 이미 시드됐는지 먼저 확인하고,
   있으면 아무것도 하지 않는다(7일 챌린지 시드 migration과 동일한 패턴).
 """
@@ -143,7 +147,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "한국거래소·미국 증권거래소 공개 운영시간 안내 종합 (2차 자료 기반, 원문 KRX/NYSE/Nasdaq 공식 페이지 대조 필요)",
             "source_url": "https://open.krx.co.kr",
-            "market_scope": "KR_US", "status": "DRAFT", "review_status": "REVIEW_REQUIRED",
+            "market_scope": "KR_US", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "거래소가 하는 가장 기본적인 역할은 무엇인가요?",
@@ -244,7 +248,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "일반적으로 통용되는 시장가/지정가 주문 개념 정리 (증권사·거래소 공통 기본 용어)",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "시장가 주문의 가장 큰 특징은 무엇인가요?",
@@ -346,7 +350,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "매수호가/매도호가/스프레드/유동성에 대한 일반적으로 통용되는 시장 미시구조 기본 개념 정리",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "매수호가가 9,900원, 매도호가가 10,000원일 때 스프레드는 얼마인가요?",
@@ -451,7 +455,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "일반적인 매매수수료·세금·환전비용 개념 정리(구체적 세율·수수료는 검수 필요 — 특정 증권사 요금 아님)",
             "source_url": None,
-            "market_scope": "KR_US", "status": "DRAFT", "review_status": "REVIEW_REQUIRED",
+            "market_scope": "KR_US", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "투자 비용을 구성하는 대표적인 세 가지 요소는 무엇인가요?",
@@ -556,7 +560,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "단순수익률 계산식 — 일반적으로 통용되는 투자 기초 공식",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "투자원금 50만원, 최종가치 60만원일 때 단순수익률은 몇 %인가요?",
@@ -659,7 +663,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "복리 계산식 — 일반적으로 통용되는 금융 수학 기초 공식",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "원금 100만원을 연 5%로 2년간 복리로 굴리면 최종가치는 얼마인가요? (소수점 이하는 반올림)",
@@ -759,7 +763,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "변동성·최대낙폭(MDD) — 일반적으로 통용되는 투자 위험 측정 기초 개념",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "고점 20,000원에서 저점 15,000원까지 하락했습니다. MDD는 몇 %인가요?",
@@ -861,7 +865,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "분산투자·상관관계 — 일반적으로 통용되는 포트폴리오 이론 기초 개념",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "분산투자의 대표적인 세 가지 방향은 무엇인가요?",
@@ -964,7 +968,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "자산배분·리밸런싱 — 일반적으로 통용되는 포트폴리오 관리 기초 개념",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "자산배분이 정하는 것은 무엇인가요?",
@@ -1065,7 +1069,7 @@ def _lessons(settings) -> list[dict]:
             ),
             "source_title": "시가총액·기업가치(EV) — 일반적으로 통용되는 기업가치 평가 기초 개념",
             "source_url": None,
-            "market_scope": "GLOBAL", "status": "PUBLISHED", "review_status": "REVIEWED",
+            "market_scope": "GLOBAL", "status": "READY_FOR_REVIEW", "review_status": "REVIEW_REQUIRED",
             "questions": [
                 {
                     "prompt": "주가 3,000원, 발행주식수 1억 주인 회사의 시가총액은 얼마인가요?",
@@ -1145,11 +1149,14 @@ def upgrade() -> None:
             lessons_t.insert().values(
                 id=lesson_id, module_id=module_id, code=lesson["code"], title=lesson["title"],
                 learning_objective=objective_text, estimated_minutes=lesson["minutes"], order_index=lesson_index,
-                status=lesson["status"], source=lesson["source_title"], reviewed_by=(
-                    "content-team" if lesson["review_status"] == "REVIEWED" else None
-                ),
-                reviewed_at=(today if lesson["review_status"] == "REVIEWED" else None),
-                source_url=lesson["source_url"], source_confirmed_at=today, content_version="v1",
+                # 이 migration은 에이전트가 새로 작성한 콘텐츠를 시드한다 — 최대
+                # READY_FOR_REVIEW까지만 두고, reviewed_by/reviewed_at/
+                # source_confirmed_at은 전부 NULL로 남긴다. 이 값들은 사람 검수자가
+                # scripts/publish_lesson.py로 명시적으로 승인할 때만 채워진다
+                # (에이전트가 자신의 산출물을 스스로 REVIEWED/PUBLISHED로 만들지
+                # 않는다는 원칙을 데이터 수준에서 강제).
+                status=lesson["status"], source=lesson["source_title"], reviewed_by=None, reviewed_at=None,
+                source_url=lesson["source_url"], source_confirmed_at=None, content_version="v1",
                 market_scope=lesson["market_scope"], review_status=lesson["review_status"], created_at=now,
             )
         )
@@ -1158,10 +1165,13 @@ def upgrade() -> None:
         summary_text = "\n".join(f"- {s}" for s in lesson["summary"])
         self_check_text = "\n".join(f"- {q}" for q in lesson["self_check"])
         terms_text = "\n".join(f"- {t}: {d}" for t, d in lesson["terms"])
+        # 실제로 원문을 열람해 확인한 적이 없으므로 "확인일"을 표시하지 않는다 —
+        # source_url이 있어도 "후보 출처"일 뿐이라는 점을 본문에도 명시한다
+        # (source_confirmed_at이 NULL인 것과 일관된 문구).
         source_note = (
             f"{lesson['source_title']}"
-            + (f" ({lesson['source_url']})" if lesson["source_url"] else "")
-            + f" — 확인일 {today.isoformat()}, 적용 시장: {lesson['market_scope']}."
+            + (f" (후보 출처 URL: {lesson['source_url']} — 아직 원문 직접 확인 전)" if lesson["source_url"] else " (후보 출처 없음)")
+            + f" 적용 시장: {lesson['market_scope']}. 검수자가 원문을 직접 확인하기 전에는 REVIEWED로 승격되지 않습니다."
             + " 이 강의의 교육용 정보 고지: " + DISCLOSURE
         )
         body_text = "\n\n".join(lesson["body"])
