@@ -75,8 +75,14 @@ docker cp "$BACKUP_FILE" "$VERIFY_CONTAINER:/tmp/restore_target.dump"
 # 것을 막는다.
 RESTORE_OK=0
 for attempt in 1 2 3 4 5; do
+    # DROP DATABASE/CREATE DATABASE는 트랜잭션 블록 안에서 실행할 수 없다 —
+    # 두 문장을 하나의 -c 문자열로 합치면 Postgres가 암묵적으로 하나의
+    # 트랜잭션으로 묶어버려 실패한다(실제 CI에서 재현됨). 반드시 별도의
+    # psql 호출 두 번으로 나눈다.
     docker exec -e PGPASSWORD="$VERIFY_PASSWORD" "$VERIFY_CONTAINER" \
-        psql -U "$VERIFY_USER" -d postgres -tAc "DROP DATABASE IF EXISTS ${VERIFY_DB}; CREATE DATABASE ${VERIFY_DB};" >/dev/null
+        psql -U "$VERIFY_USER" -d postgres -tAc "DROP DATABASE IF EXISTS ${VERIFY_DB};" >/dev/null
+    docker exec -e PGPASSWORD="$VERIFY_PASSWORD" "$VERIFY_CONTAINER" \
+        psql -U "$VERIFY_USER" -d postgres -tAc "CREATE DATABASE ${VERIFY_DB};" >/dev/null
     if docker exec "$VERIFY_CONTAINER" \
         pg_restore --no-owner --no-privileges -U "$VERIFY_USER" -d "$VERIFY_DB" /tmp/restore_target.dump; then
         RESTORE_OK=1
