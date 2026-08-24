@@ -77,11 +77,15 @@ echo "=== 5. 데모 종목 존재 ==="
 INSTRUMENT_COUNT="$(run_sql 'SELECT count(*) FROM instruments;' | tr -d '[:space:]')"
 [ "${INSTRUMENT_COUNT:-0}" -gt 0 ] 2>/dev/null && pass "instruments 존재 (count=$INSTRUMENT_COUNT)" || fail "instruments가 비어 있음"
 
-echo "=== 6. lesson-01~05(code가 없는 초기 강의)는 PUBLISHED로 공개 ==="
-LEGACY_PUBLISHED_COUNT="$(run_sql "SELECT count(*) FROM lessons WHERE code IS NULL AND status = 'PUBLISHED';" | tr -d '[:space:]')"
+echo "=== 6. lesson-01~05는 PUBLISHED로 공개 ==="
+# 주의: e75a015c620b migration이 1~5강에도 안정적인 code(lesson-01~05)를
+# 소급 부여했다(예전에는 code가 NULL이었다 — docs/features/investment-lessons-06-15.md의
+# 서술은 그 이전 상태 기준이라 오래됐다). 그래서 "code IS NULL"이 아니라
+# 실제 code 패턴으로 확인해야 한다 — 이 버그는 실제 CI 실행에서 발견됐다.
+LEGACY_PUBLISHED_COUNT="$(run_sql "SELECT count(*) FROM lessons WHERE code ~ '^lesson-0[1-5]\$' AND status = 'PUBLISHED';" | tr -d '[:space:]')"
 [ "${LEGACY_PUBLISHED_COUNT:-0}" -ge 5 ] 2>/dev/null \
-    && pass "code 없는(1~5강 등) PUBLISHED 강의 $LEGACY_PUBLISHED_COUNT건" \
-    || fail "code 없는 PUBLISHED 강의가 5건 미만(count=$LEGACY_PUBLISHED_COUNT)"
+    && pass "lesson-01~05 PUBLISHED 강의 $LEGACY_PUBLISHED_COUNT건" \
+    || fail "lesson-01~05 PUBLISHED 강의가 5건 미만(count=$LEGACY_PUBLISHED_COUNT)"
 
 echo "=== 7. lesson-06~15는 게시 전 상태(READY_FOR_REVIEW/REVIEW_REQUIRED) ==="
 PRE_PUBLISH_COUNT="$(run_sql "SELECT count(*) FROM lessons WHERE code ~ '^lesson-(0[6-9]|1[0-5])\$' AND status = 'READY_FOR_REVIEW' AND review_status = 'REVIEW_REQUIRED';" | tr -d '[:space:]')"

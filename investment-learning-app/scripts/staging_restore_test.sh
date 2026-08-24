@@ -43,21 +43,52 @@ docker run -d --rm --name "$VERIFY_CONTAINER" \
     postgres:16-alpine >/dev/null
 
 echo "[staging_restore_test] 컨테이너 준비를 기다립니다..."
-for _ in $(seq 1 30); do
+# 공식 postgres 이미지는 최초 기동 시 initdb용 임시 인스턴스를 잠깐 띄웠다가
+# 내리고, 실제로 쓸 인스턴스를 다시 띄우는 2단계 과정을 거친다. pg_isready가
+# 딱 한 번만 성공해도 그게 임시 인스턴스일 수 있어("shutting down" 중에
+# pg_restore가 붙는 레이스로 실제 CI에서 재현됨), 연속으로 여러 번 성공해야
+# 진짜 준비된 것으로 본다.
+CONSECUTIVE_OK=0
+for _ in $(seq 1 60); do
     if docker exec "$VERIFY_CONTAINER" pg_isready -U "$VERIFY_USER" -d "$VERIFY_DB" >/dev/null 2>&1; then
-        break
+        CONSECUTIVE_OK=$((CONSECUTIVE_OK + 1))
+        if [ "$CONSECUTIVE_OK" -ge 3 ]; then
+            break
+        fi
+    else
+        CONSECUTIVE_OK=0
     fi
     sleep 1
 done
-if ! docker exec "$VERIFY_CONTAINER" pg_isready -U "$VERIFY_USER" -d "$VERIFY_DB" >/dev/null 2>&1; then
-    echo "[오류] 임시 검증용 Postgres가 준비되지 않았습니다." >&2
+if [ "$CONSECUTIVE_OK" -lt 3 ]; then
+    echo "[오류] 임시 검증용 Postgres가 안정적으로 준비되지 않았습니다." >&2
     exit 1
 fi
 
 echo "[staging_restore_test] 백업 파일을 컨테이너로 복사하고 pg_restore를 실행합니다 (내용은 출력하지 않습니다)..."
 docker cp "$BACKUP_FILE" "$VERIFY_CONTAINER:/tmp/restore_target.dump"
-docker exec "$VERIFY_CONTAINER" \
-    pg_restore --no-owner --no-privileges -U "$VERIFY_USER" -d "$VERIFY_DB" /tmp/restore_target.dump
+
+# 위 안정성 체크에도 불구하고 초기화 직후의 재시작 레이스가 완전히 배제되진
+# 않으므로, pg_restore 자체도 몇 번 재시도한다. 매 시도 전에 대상 DB를
+# drop/create로 비워 재시도가 항상 "빈 DB에 처음 붓는" 상태에서 시작하게
+# 한다 — 부분 복원 상태에서 재시도해 "관계가 이미 존재함" 오류로 오염되는
+# 것을 막는다.
+RESTORE_OK=0
+for attempt in 1 2 3 4 5; do
+    docker exec -e PGPASSWORD="$VERIFY_PASSWORD" "$VERIFY_CONTAINER" \
+        psql -U "$VERIFY_USER" -d postgres -tAc "DROP DATABASE IF EXISTS ${VERIFY_DB}; CREATE DATABASE ${VERIFY_DB};" >/dev/null
+    if docker exec "$VERIFY_CONTAINER" \
+        pg_restore --no-owner --no-privileges -U "$VERIFY_USER" -d "$VERIFY_DB" /tmp/restore_target.dump; then
+        RESTORE_OK=1
+        break
+    fi
+    echo "[staging_restore_test] pg_restore 시도 ${attempt}/5 실패 — 2초 후 재시도합니다." >&2
+    sleep 2
+done
+if [ "$RESTORE_OK" -ne 1 ]; then
+    echo "[오류] pg_restore가 5회 재시도 후에도 실패했습니다." >&2
+    exit 1
+fi
 
 echo "[staging_restore_test] 핵심 테이블 행 수와 alembic revision을 확인합니다..."
 run_sql() {
