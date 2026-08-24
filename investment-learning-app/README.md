@@ -319,6 +319,174 @@ CI 워크플로도 매 실행 끝에 이 명령을 쓰지만, 그건 CI 러너 �
   중개하지 않는 모의투자(가상자금) 학습 앱**이다 — 모든 화면의 금액과 손익은
   가상자금 기준이다.
 
+## 로컬 스테이징 환경 (Local Staging)
+
+`chore/local-staging-environment`에서 추가됨. **개발(dev) / 로컬 스테이징 /
+클라우드 스테이징 / 운영(production)은 서로 다른 네 가지 개념이다** — 이
+문서에서 "스테이징"이라고 하면 기본적으로 아래 표의 "로컬 스테이징"을
+가리킨다(아직 클라우드 스테이징은 이 저장소에 없다).
+
+| | dev(개발) | **로컬 스테이징** | 클라우드 스테이징(아직 없음) | production(아직 없음) |
+|---|---|---|---|---|
+| 실행 위치 | 개발자 로컬 Docker | 개발자 로컬 Docker | 클라우드(예정) | 클라우드 |
+| DB | `postgres_data` 볼륨 | `investment-learning-staging_postgres_data` 볼륨(완전 분리) | 별도 클라우드 DB | 별도 클라우드 DB |
+| Compose 파일 | `docker-compose.yml` | `docker-compose.yml` + `docker-compose.staging.yml` | (미정) | (미정) |
+| `ENVIRONMENT` | `development` | `staging` | `staging` | `production` |
+| 접근 범위 | `localhost`만 | **`localhost`/`127.0.0.1`만 — 인터넷 노출 금지** | 팀 내부(HTTPS) | 실제 사용자(HTTPS) |
+| `COOKIE_SECURE` | `false` | `false`(로컬 HTTP 전용 예외, 아래 참고) | `true`(필수) | `true`(필수) |
+| 목적 | 일상 개발 | PR 병합 전 "깨끗한 volume에서 처음부터" 배포 절차 리허설, 강의 게시 절차 리허설 | 실제 배포 전 마지막 확인 | 실서비스 |
+
+**로컬 스테이징은 클라우드 스테이징을 대체하지 않는다.** 운영 배포 전에는
+여전히 실제 클라우드 스테이징 환경(HTTPS, 팀이 접근 가능한 URL, 실제
+비밀관리 서비스 연동)이 별도로 필요하다 — 이 브랜치는 그 클라우드 인프라를
+만들지 않았다(범위 밖, 아래 "알려진 제한사항" 참고). 로컬 스테이징의
+목적은 좁다: dev 환경/데이터와 완전히 분리된 상태에서 "빈 DB에서부터 migration
+→ 시드 → 강의 게시" 전체 절차를 실수 없이 반복 연습하고 자동 검증하는 것이다.
+
+### 왜 스테이징 DB와 운영 DB를 절대 공유하면 안 되는가
+
+스테이징은 배포 절차·마이그레이션·백업/복원 절차를 "실패해도 안전하게"
+반복 연습하는 곳이다. 운영 DB와 연결을 공유하면 스테이징에서의 실수(잘못된
+마이그레이션 되돌리기, 테스트 데이터 삽입, 강의 게시 스크립트 오작동)가
+그대로 실제 사용자 데이터를 훼손한다. 그래서 이 저장소는 여러 겹의
+안전장치를 둔다: ① `docker-compose.staging.yml`이 `staging-postgres`라는
+전용 네트워크 별칭의 완전히 분리된 named volume만 쓰고, ② `.env.staging`의
+`DATABASE_URL` 호스트가 반드시 `staging-postgres`여야 하며, ③
+`app/core/config.py`의 `Settings` 검증기가 `ENVIRONMENT=staging`일 때 그
+호스트가 아니면(또는 URL에 `prod`로 보이는 문자열이 있으면) **앱 기동
+자체를 거부**한다(`apps/api/tests/test_staging_settings.py`로 검증).
+
+### 로컬 스테이징 기동
+
+```bash
+cd investment-learning-app
+cp .env.staging.example .env.staging
+# .env.staging을 열어 JWT_SECRET을 무작위 값으로 교체한다 (예: openssl rand -hex 32)
+# — 예시 플레이스홀더를 그대로 두면 위 안전장치가 기동을 거부한다.
+
+docker compose \
+  --project-name investment-learning-staging \
+  --env-file .env.staging \
+  -f docker-compose.yml \
+  -f docker-compose.staging.yml \
+  up --build -d
+```
+
+편의 스크립트(`scripts/staging_up.sh`)는 위와 완전히 동일한 동작을 하며,
+`.env.staging`이 없거나 예시 플레이스홀더가 남아있으면 컨테이너가
+크래시루프하기 전에 미리 사람이 읽을 수 있는 오류로 중단한다.
+
+- 접속 주소: 웹 http://localhost:3001 , API http://localhost:8001
+  (dev의 3000/8000과 충돌하지 않는다 — dev를 동시에 띄워둬도 무방하다)
+- Postgres는 기본적으로 호스트 포트를 열지 않는다(외부 노출 최소화).
+  로컬 디버깅용으로 열어야 하면 `docker-compose.staging.yml`의 주석 처리된
+  `127.0.0.1:5433:5432` 항목을 참고한다(항상 localhost 전용으로만 연다).
+- 검증: `bash scripts/verify_staging.sh` — dev와 project name/volume이
+  분리돼 있는지, web/API 헬스·readiness가 200인지, DB migration이 head와
+  일치하는지, 데모 종목이 있는지, 1~5강은 공개(PUBLISHED)이고 6~15강은
+  아직 게시 전(READY_FOR_REVIEW/REVIEW_REQUIRED)이며 일반 사용자 API로
+  노출되지 않는지, 헬스 응답/로그에 비밀정보가 없는지, 재시작 후에도 데이터가
+  유지되는지, backup/restore가 실제로 성공하는지까지 자동으로 확인한다.
+
+### 중지·데이터 삭제
+
+```bash
+# 중지만 — 볼륨(DB 데이터)은 보존된다
+docker compose \
+  --project-name investment-learning-staging \
+  --env-file .env.staging \
+  -f docker-compose.yml \
+  -f docker-compose.staging.yml \
+  down
+```
+
+**데이터(volume)까지 완전히 삭제하는 명령은 별도다** — 기본 `down` 명령에는
+`-v`를 절대 포함하지 않는다:
+
+```bash
+bash scripts/staging_reset_data.sh --yes-delete-staging-data
+```
+
+### 백업·복원 절차
+
+```bash
+bash scripts/staging_backup.sh          # backups/staging_<UTC타임스탬프>.dump 생성 (0바이트면 실패 처리)
+bash scripts/staging_restore_test.sh    # 가장 최근 백업을 "임시 검증용" Postgres 컨테이너에만 복원해 확인
+                                          # (원본 staging-postgres는 절대 건드리지 않는다)
+```
+
+`backups/`는 `.gitignore`에 등록돼 있다 — 백업 파일은 저장소에 커밋되지
+않는다. 두 스크립트 모두 DB 비밀번호나 덤프 내용을 로그에 출력하지 않는다
+(파일명·크기·행 수 같은 메타데이터만 출력).
+
+### 강의(lesson-06~15) 게시 절차 (로컬 스테이징)
+
+`scripts/publish_reviewed_lessons_staging.sh`는 `apps/api/scripts/publish_lesson.py`
+(운영자 전용 CLI, `apps/api/README.md`·`docs/features/investment-lessons-06-15.md`
+참고)를 로컬 스테이징 컨테이너 안에서 강의별로 하나씩 호출하는 래퍼다.
+**사람 운영자가 실제 검수를 마친 뒤 직접 실행해야 하며, 에이전트가 스스로
+`--execute`로 실행해서는 안 된다** — `publish_lesson.py` 자체의 설계 원칙과
+동일하다.
+
+```bash
+# 1) 사전 점검만(기본값) — ENVIRONMENT/DB 호스트/최근 백업 존재/현재 lesson
+#    상태를 확인만 하고 아무것도 바꾸지 않는다.
+bash scripts/publish_reviewed_lessons_staging.sh
+
+# 2) 실제 게시 — 사람 운영자가 검수 후에만 실행한다.
+bash scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="검수자 이름"
+```
+
+안전장치: `ENVIRONMENT=staging` 확인, `DATABASE_URL` 호스트가
+`staging-postgres`인지 확인(운영으로 의심되면 즉시 중단), 24시간 이내 백업이
+있는지 확인, 강의별 `content_version`/`source_url` 유무를 조회해
+`--source-verified` 값과 모순되면(예: 출처 URL이 있는데 false로 지정하려는
+경우) 그 즉시 전체 시퀀스를 중단, 한 강의라도 실패하면 이후 강의는 처리하지
+않고 중단, 실행 후 상태·감사기록(`lesson_review_audits`) 재조회, 동일 명령
+재실행 시 이미 승인된 강의는 `publish_lesson.py` 자체의 멱등성 덕분에 건너뛴다.
+
+### `COOKIE_SECURE=false` 예외 — 반드시 읽을 것
+
+`.env.staging.example`의 기본값은 `COOKIE_SECURE=false` +
+`STAGING_ALLOW_INSECURE_COOKIE=true`다. **이것은 "로컬 Docker Compose에서
+순수 HTTP(`http://localhost`)로만 테스트한다"는 의도적인 예외이며, 이
+조합으로 띄운 인스턴스를 절대 인터넷에 노출해서는 안 된다.** 클라우드에
+어떤 형태로든 배포하는 순간(포트포워딩·터널링·리버스프록시 포함) 이
+조합은 인증 쿠키가 평문으로 오갈 수 있다는 뜻이 된다. 실제 HTTPS로 서빙되는
+클라우드 스테이징/운영에서는 `COOKIE_SECURE=true`가 필수이며(위 표),
+`app/core/config.py`의 검증기가 `STAGING_ALLOW_INSECURE_COOKIE=true` 없이
+`COOKIE_SECURE=false`를 쓰면 기동 자체를 거부한다 — 즉 이 예외는 명시적으로
+켜야만 동작하고, 켜면 컨테이너 시작 로그에 경고가 남는다.
+
+### CI에서의 로컬 스테이징 검증
+
+`.github/workflows/investment-learning-staging-ci.yml`이 매 PR·main 푸시마다
+빈 volume에서부터 스테이징 스택 전체를 새로 기동해
+`scripts/verify_staging.sh`(backup/restore-to-temp-DB, 재시작 후 데이터 유지
+포함)를 실행하고 항상 `-v`로 정리한다. **이 워크플로가 띄우는 인스턴스는
+그 실행 안에서만 존재하는 일회용(ephemeral) 검증 환경이다** — 상시
+운영되는 서버가 아니며, 실제 클라우드 스테이징을 대체하지 않는다. Repository
+secret은 쓰지 않는다 — `JWT_SECRET` 등은 매 실행마다 무작위로 새로 생성해
+로그에 마스킹 처리한다(`.github/scripts/generate_ci_staging_env.sh`).
+
+### 알려진 제한사항 (로컬 스테이징 범위)
+
+- 이 저장소를 개발한 샌드박스는 Docker 데몬을 구동할 수 없어(중첩 컨테이너
+  미지원), `docker compose ... up --build`로 스테이징 스택을 이 세션에서
+  직접 기동해 검증하지는 못했다. `docker compose config`로 두 compose
+  파일(`docker-compose.yml` + `docker-compose.staging.yml`) 병합 결과가
+  올바른지(포트·볼륨·env_file이 dev와 완전히 분리되는지)는 직접 확인했고,
+  `app/core/config.py`의 staging 안전 검증기는 pytest로 실제 실행해
+  확인했다(`apps/api/tests/test_staging_settings.py`). 실제 기동·health·
+  migration/seed·backup/restore·재시작 유지 검증은 위 GitHub Actions
+  워크플로가 실제 Docker 데몬이 있는 Ubuntu runner에서 수행한다 — 실행
+  결과는 PR의 Checks 탭에서 확인할 수 있다.
+- 실제 클라우드 스테이징 환경(HTTPS, 별도 클라우드 DB, 비밀관리 서비스
+  연동)은 이 브랜치에도 아직 없다 — 운영 배포 전에는 별도로 구성해야 한다.
+- `scripts/publish_reviewed_lessons_staging.sh`는 이번 작업에서 만들고
+  사전 점검(`--execute` 없이 실행)까지만 확인했다 — 실제 게시(`--execute`)는
+  사람 운영자가 검수를 마친 뒤 별도로 실행해야 한다.
+
 ## 현재 진행 상태
 
 - [x] 저장소 골격 구성
@@ -429,3 +597,32 @@ CI 워크플로도 매 실행 끝에 이 명령을 쓰지만, 그건 CI 러너 �
       테스트 9종 추가, 기존 전체 테스트는 회귀 없이 그대로 통과한다. 범위
       밖: 자유 텍스트 손절 조건의 방향(상향/하향) 자동 판별 — 정규식·NLP
       없이는 오탐 위험이 커서 "반복 변경 횟수"로만 관찰한다.
+- [x] 로컬 스테이징 환경 (`chore/local-staging-environment`): 기존
+      `docker-compose.yml`을 건드리지 않고 `docker-compose.staging.yml`
+      오버라이드 + `.env.staging.example`로, dev와 project name·포트·named
+      volume이 전부 분리된 로컬 전용 스테이징 스택을 추가했다. dev
+      서비스까지 함께 뜨는 것을 막기 위해 새 서비스 키를 만들지 않고 기존
+      키(postgres/api/web)를 오버라이드하면서 네트워크 별칭(`staging-postgres`
+      등)으로 스테이징 전용 호스트명을 부여했다 — Compose가 `ports`/`env_file`
+      리스트를 파일 간에 대체가 아니라 합산한다는 점을 실측으로 확인하고
+      `!override` 병합 태그로 바로잡았다(자세한 내용은 compose 파일 주석
+      참고). `app/core/config.py`에 `ENVIRONMENT=staging` 전용 안전 검증기를
+      추가해 `DATABASE_URL` 호스트가 `staging-postgres`가 아니거나, 운영처럼
+      보이는 문자열이 있거나, 예시 비밀값을 그대로 쓰거나, CORS origin이
+      loopback이 아니면 앱 기동 자체를 거부한다(`COOKIE_SECURE=false`는
+      `STAGING_ALLOW_INSECURE_COOKIE=true`를 명시해야만 하는 로컬 전용
+      예외로 별도 처리, `apps/api/tests/test_staging_settings.py`).
+      `scripts/staging_{up,down,reset_data,backup,restore_test}.sh`,
+      `scripts/verify_staging.sh`(요구된 검증 항목 전부), 그리고 사람 운영자
+      전용 `scripts/publish_reviewed_lessons_staging.sh`(사전 점검까지만 이번
+      작업에서 실행, 실제 게시는 하지 않음)를 추가했다. GitHub Actions
+      워크플로(`investment-learning-staging-ci.yml`)가 매 PR·main 푸시마다
+      빈 volume에서부터 스테이징 스택을 새로 띄워 전체 검증(health/readiness/
+      migration/seed/노출/비밀정보/재시작 유지/backup+restore)을 수행하고
+      항상 정리한다. **이 개발 세션은 Docker 데몬을 구동할 수 없어(중첩
+      컨테이너 미지원) 실제 기동은 검증하지 못했다** — `docker compose
+      config`로 두 compose 파일 병합 결과(포트·볼륨·env_file 분리)를
+      직접 확인했고, 새 pytest는 실제로 실행해 통과를 확인했으며, 실제
+      기동·backup/restore·재시작 유지 검증은 위 CI 워크플로가 수행한다. 실제
+      클라우드 스테이징 환경은 이 브랜치에도 없다 — 운영 배포 전 별도 구성이
+      필요하다(README "로컬 스테이징 환경" 절 참고).

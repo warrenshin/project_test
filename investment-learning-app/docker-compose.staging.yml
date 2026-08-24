@@ -1,0 +1,82 @@
+# 로컬 스테이징 오버라이드 파일.
+#
+# 반드시 docker-compose.yml과 함께 -f로 결합해서만 쓴다(단독 사용 불가 —
+# build context 등 기본 필드를 상속받아야 한다). 기존 서비스 키
+# (postgres/redis/api/web)를 재사용해 오버라이드하는 이유: 이 파일과
+# docker-compose.yml을 동시에 -f로 넘겨 `up -d`를 실행하면, 만약 여기서
+# staging-postgres 같은 완전히 새 서비스 키를 선언했다면 병합된 모델에
+# 8개 서비스가 모두 생겨 dev 서비스까지 함께 기동돼 버린다(운영 지시사항
+# "기존 docker-compose.yml의 개발 동작을 깨뜨리지 마라"와 정면으로 배치).
+# 대신 각 서비스에 staging-* 네트워크 별칭을 추가해 DATABASE_URL 등에서
+# staging-postgres라는 호스트명이 실제로 resolve되도록 한다.
+#
+# Compose 오버라이드 병합 규칙(직접 `docker compose config`로 실측 확인함 —
+# 문서상 통념과 달랐다):
+# - environment/labels 같은 매핑형 필드는 파일 간 key 단위로 deep-merge된다.
+# - volumes 리스트는 override 파일에 값이 있으면 base 값을 완전히 대체한다.
+# - 그러나 ports/env_file 리스트는 대체가 아니라 "합산"된다(base + override가
+#   전부 살아남는다) — 그냥 두면 postgres/api/web이 dev 포트(5432/8000/3000,
+#   전체 인터페이스 바인딩)와 staging 포트(5433/8001/3001, 127.0.0.1 전용)를
+#   동시에 노출하게 되고, api/web의 env_file도 base의 `.env`까지 함께
+#   요구해버린다. Compose Specification의 `!override` 병합 태그로 이 두
+#   필드는 명시적으로 "대체"를 강제한다.
+
+services:
+  postgres:
+    ports: !override []
+    volumes:
+      - staging_postgres_data:/var/lib/postgresql/data
+    networks:
+      default:
+        aliases:
+          - staging-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-staging_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-staging_app}
+      POSTGRES_DB: ${POSTGRES_DB:-investment_learning_staging}
+    # 기본적으로 호스트 포트를 열지 않는다(요구사항: "postgres → 외부 포트
+    # 없음, 필요 시에만 예외"). 로컬에서 psql 등으로 직접 붙어 디버깅해야
+    # 하면 아래 주석을 해제한다 — 반드시 127.0.0.1 전용으로만 연다.
+    # ports: !override
+    #   - "127.0.0.1:5433:5432"
+
+  redis:
+    ports: !override []
+    networks:
+      default:
+        aliases:
+          - staging-redis
+
+  api:
+    # 개발용 .env가 아니라 .env.staging 값만 주입한다(위 병합 규칙 설명 참고).
+    # 실패해도 안전하게 재기동 가능하도록 base 이미지의
+    # docker_entrypoint.sh(migration -> seed -> healthcheck 통과 전까지
+    # uvicorn 미기동)를 그대로 재사용한다.
+    env_file: !override
+      - .env.staging
+    ports: !override
+      - "127.0.0.1:${STAGING_API_PORT:-8001}:8000"
+    networks:
+      default:
+        aliases:
+          - staging-api
+
+  web:
+    env_file: !override
+      - .env.staging
+    build:
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8001}
+    ports: !override
+      - "127.0.0.1:${STAGING_WEB_PORT:-3001}:3000"
+    networks:
+      default:
+        aliases:
+          - staging-web
+
+volumes:
+  staging_postgres_data:
+    name: investment-learning-staging_postgres_data
+    # dev의 `postgres_data` 볼륨과 이름이 절대 겹치지 않도록 project name과
+    # 무관하게 완전한 고정 이름을 명시한다(이중 안전장치 — --project-name도
+    # 별도로 지정하지만, 볼륨 이름 자체도 명시적으로 분리한다).
