@@ -79,6 +79,21 @@ def test_publish_rejects_when_source_url_present_but_not_verified(db):
     assert lesson.source_confirmed_at is None
 
 
+def test_publish_rejects_source_verified_true_when_no_source_url_exists(db):
+    """출처 URL이 아예 없는 강의(예: lesson-12처럼 후보 출처 자체가 없는 경우)에
+    --source-verified true를 지정하면 거절해야 한다 — 확인할 대상이 없는데
+    "확인했다"는 감사기록을 남기는 것은 의미상 모순이다."""
+    lesson = _make_ready_for_review_lesson(db, code=f"test-{uuid.uuid4().hex[:8]}", source_url=None)
+    with pytest.raises(PublishRejected, match="출처 URL이 없습니다"):
+        publish_lesson(
+            db, code=lesson.code, expected_content_version="v1", reviewer="tester",
+            reviewed_at=datetime.now(timezone.utc), source_verified=True, note="test",
+        )
+    db.refresh(lesson)
+    assert lesson.status == CONTENT_READY_FOR_REVIEW  # 바뀌지 않았다
+    assert lesson.reviewed_by is None
+
+
 def test_publish_rejects_wrong_status(db):
     lesson = Lesson(
         module_id=_throwaway_module_id(db), code=f"test-{uuid.uuid4().hex[:8]}", title="이미 DRAFT",

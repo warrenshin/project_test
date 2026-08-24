@@ -31,6 +31,8 @@
 - --content-version이 현재 lesson.content_version과 다름(그 사이 콘텐츠가
   바뀌었다는 뜻) -> 거절
 - lesson.source_url이 있는데 --source-verified true가 아님 -> 거절
+- lesson.source_url이 없는데 --source-verified true임(확인할 대상 자체가 없는데
+  "확인했다"는 감사기록을 남기는 의미상 모순) -> 거절
 - 한 번에 하나의 code만 승인한다(여러 강의 일괄 처리 옵션 없음)
 - 승인마다 lesson_review_audits에 감사기록을 남긴다((lesson_id,
   content_version, action) unique 제약 + SAVEPOINT로 동일 요청 재실행이
@@ -127,6 +129,15 @@ def publish_lesson(
             f"lesson {code!r}에는 확인이 필요한 출처 URL({lesson.source_url})이 있습니다 — "
             "--source-verified true로 원문을 직접 확인했음을 명시해야 승인할 수 있습니다. "
             "검색 결과나 제3자 요약만으로는 확인 완료로 인정되지 않습니다."
+        )
+
+    if source_verified and not lesson.source_url:
+        raise PublishRejected(
+            f"lesson {code!r}에는 연결된 출처 URL이 없습니다 — 확인할 대상이 없는데 "
+            "--source-verified true를 지정하는 것은 의미가 없습니다(감사기록에 '출처를 "
+            "확인했다'는 거짓 기록이 남습니다). 출처 URL이 없는 강의는 --source-verified "
+            "false로 승인하세요(이 경우 사람이 본문·퀴즈 내용 자체는 검토했지만, 별도로 "
+            "대조할 외부 공식 출처가 애초에 없었다는 뜻입니다)."
         )
 
     lesson.review_status = REVIEW_REVIEWED

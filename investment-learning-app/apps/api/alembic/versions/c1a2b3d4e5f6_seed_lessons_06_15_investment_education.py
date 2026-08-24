@@ -1226,6 +1226,32 @@ def downgrade() -> None:
     conn = op.get_bind()
     codes = list(f"lesson-{n:02d}" for n in range(6, 16))
 
+    # 안전장치: 강의가 하나라도 실제 승인·게시되면 scripts/publish_lesson.py가
+    # lesson_review_audits에 감사기록을 남긴다. 이 downgrade는 그 감사기록을
+    # 자동으로 지우지 않는다(운영자가 데이터 보존 여부를 직접 판단해야 하는
+    # 문제이기 때문) — 그런데 감사기록이 남아있는 채로 아래 DELETE FROM lessons를
+    # 실행하면 lesson_review_audits.lesson_id 외래키 제약을 위반하며 실패한다.
+    # 다른 DELETE 문(quiz_attempts, lesson_progress, content_blocks 등)이 이미
+    # 일부 실행된 뒤에 그 실패가 나면 "부분적으로만 지워진" 상태가 될 위험이
+    # 있으므로, 어떤 DELETE도 실행하기 전에 먼저 확인하고 조건에 걸리면 즉시
+    # RuntimeError로 중단한다 — lesson_review_audits는 여기서도 건드리지 않는다
+    # (CASCADE나 직접 DELETE 금지).
+    existing_audits = conn.execute(
+        sa.text("SELECT DISTINCT lesson_code FROM lesson_review_audits WHERE lesson_code IN :codes ORDER BY lesson_code")
+        .bindparams(sa.bindparam("codes", expanding=True)),
+        {"codes": codes},
+    ).fetchall()
+    if existing_audits:
+        audited_codes = ", ".join(row[0] for row in existing_audits)
+        raise RuntimeError(
+            "6~15강 downgrade를 안전하게 수행할 수 없습니다: 다음 강의에 이미 승인(게시) 감사기록이 "
+            f"존재합니다 — {audited_codes}. 승인된 강의의 감사기록이 남아있는 한 이 migration은 "
+            "안전한 downgrade를 수행할 수 없습니다. lesson_review_audits는 이 migration이 자동으로 "
+            "삭제하지 않습니다 — 승인 이력을 조용히 지우는 대신 운영자가 데이터 보존 여부(감사기록을 "
+            "남긴 채 콘텐츠만 되돌릴지, 감사기록까지 포함해 완전히 되돌릴지)를 판단해 별도의 롤백 "
+            "계획을 수립해야 합니다."
+        )
+
     def _delete(sql: str) -> None:
         conn.execute(sa.text(sql).bindparams(sa.bindparam("codes", expanding=True)), {"codes": codes})
 
