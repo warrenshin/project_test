@@ -1,0 +1,121 @@
+name: investment-learning-app Local Staging Compose CI
+
+# 이 워크플로가 띄우는 "스테이징" 인스턴스는 이 GitHub Actions 실행
+# 안에서만 존재하는 일회용(ephemeral) 검증 환경이다 — 실제 배포되는 상시
+# 스테이징 서버가 아니다. docker-compose.staging.yml + .env.staging(이 job이
+# 무작위로 생성) 조합이 dev용 docker-compose.yml/CI(investment-learning
+# -docker-build-ci.yml)와 독립적으로 정상 동작하는지, 그리고
+# scripts/verify_staging.sh·staging_backup.sh·staging_restore_test.sh가
+# 실제로 동작하는지를 매 실행마다 처음부터 검증한다. 실제 클라우드 스테이징
+# 환경은 아직 이 저장소에 없다(README 참고) — 이 워크플로는 그것을
+# 대체하지 않는다.
+#
+# 어떤 컨테이너 레지스트리에도 push하지 않고 어떤 환경에도 배포하지 않는다.
+# GitHub repository secret을 쓰지 않는다 — JWT_SECRET 등은 매 실행마다
+# 무작위로 새로 생성해 로그 마스킹(::add-mask::)에 등록한다
+# (.github/scripts/generate_ci_staging_env.sh).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "investment-learning-app/apps/api/**"
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/docker-compose.yml"
+      - "investment-learning-app/docker-compose.staging.yml"
+      - "investment-learning-app/scripts/**"
+      - ".github/workflows/investment-learning-staging-ci.yml"
+      - ".github/scripts/**"
+  pull_request:
+    paths:
+      - "investment-learning-app/apps/api/**"
+      - "investment-learning-app/apps/web/**"
+      - "investment-learning-app/docker-compose.yml"
+      - "investment-learning-app/docker-compose.staging.yml"
+      - "investment-learning-app/scripts/**"
+      - ".github/workflows/investment-learning-staging-ci.yml"
+      - ".github/scripts/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staging-compose-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: investment-learning-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: docker / docker compose 버전 확인
+        run: |
+          docker version
+          docker compose version
+
+      - name: CI 전용 임시 .env.staging 생성 (커밋되지 않고, artifact로도 업로드되지 않음)
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/generate_ci_staging_env.sh"
+
+      - name: docker compose config 유효성 검증 (dev + staging override, 민감값은 위에서 마스킹됨)
+        run: |
+          docker compose \
+            --project-name investment-learning-staging \
+            --env-file .env.staging \
+            -f docker-compose.yml \
+            -f docker-compose.staging.yml \
+            config
+
+      - name: 스테이징 스택 기동 (빌드 포함, 빈 volume에서 최초 실행)
+        run: bash scripts/staging_up.sh
+
+      - name: staging-postgres/staging-api 컨테이너 healthy 대기
+        # wait_for_container_healthy.sh는 자체적으로 -p/-f/--env-file을 받지
+        # 않고 `docker compose ps`를 그대로 호출하므로, 이 스텝에서만 COMPOSE_*
+        # 환경변수로 동일한 조합(project name + 두 compose 파일 + env file)을
+        # 지정해 dev CI와 동일한 헬퍼 스크립트를 그대로 재사용한다.
+        env:
+          COMPOSE_PROJECT_NAME: investment-learning-staging
+          COMPOSE_FILE: "docker-compose.yml:docker-compose.staging.yml"
+          COMPOSE_ENV_FILES: ".env.staging"
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" postgres 120
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" api 180
+          docker compose ps
+
+      - name: API/Web health 엔드포인트 확인 (직접 대기 — dev CI 헬퍼는 project 플래그를 안 받으므로 curl로 직접 폴링)
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://127.0.0.1:8001/health/live "staging API /health/live" 120
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://127.0.0.1:8001/health/ready "staging API /health/ready" 120
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://127.0.0.1:3001/ "staging Web /" 120
+
+      - name: 전체 스테이징 검증 스위트 실행 (verify_staging.sh — health/readiness/migration/seed/노출/비밀정보/재시작 유지/backup+restore 전부 포함)
+        run: bash scripts/verify_staging.sh
+
+      - name: 최종 container 상태 확인
+        if: always()
+        run: |
+          docker compose --project-name investment-learning-staging --env-file .env.staging \
+            -f docker-compose.yml -f docker-compose.staging.yml ps
+
+      - name: 실패 시 증거 로그 출력 (민감정보 제외 — cookie/token/password/DB URL 미노출)
+        if: failure()
+        run: |
+          COMPOSE="docker compose --project-name investment-learning-staging --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml"
+          echo "--- compose ps ---"
+          $COMPOSE ps || true
+          echo "--- api 최근 로그 (200줄) ---"
+          $COMPOSE logs --tail=200 api || true
+          echo "--- web 최근 로그 (200줄) ---"
+          $COMPOSE logs --tail=200 web || true
+          echo "--- postgres 최근 로그 (100줄) ---"
+          $COMPOSE logs --tail=100 postgres || true
+
+      - name: Cleanup — 스테이징 스택 + 볼륨 삭제
+        # ⚠️ 이 GitHub Actions 러너 위 격리된 볼륨 전용(일회용 CI 인스턴스). 로컬/운영 데이터에는 사용 금지.
+        if: always()
+        run: bash scripts/staging_reset_data.sh --yes-delete-staging-data

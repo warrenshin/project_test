@@ -8,6 +8,12 @@ venv/
 # Env
 .env
 .env.local
+.env.staging
+
+# 로컬 스테이징 backup/restore 산출물 (UTC 타임스탬프 포함 DB 덤프 등 —
+# 절대 커밋하지 않는다)
+/backups/
+apps/api/backups/
 
 # Node / frontend
 node_modules/

@@ -1,5 +1,8 @@
+import logging
+import sys
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -92,6 +95,13 @@ class Settings(BaseSettings):
     access_cookie_path: str = "/"
     refresh_cookie_path: str = "/v1/auth"
 
+    # --- 로컬 스테이징 전용 예외 스위치 ---
+    # environment=staging이고 이 값이 false(기본)면 COOKIE_SECURE=false를 거부한다.
+    # true로 켜는 것은 "로컬 Docker Compose에서 순수 HTTP로만 테스트한다"는 의미이며,
+    # 절대로 인터넷에 노출해서는 안 된다(never expose to the internet). 실제 클라우드
+    # 스테이징(HTTPS로 서빙)에서는 이 값을 켜지 않고 COOKIE_SECURE=true를 써야 한다.
+    staging_allow_insecure_cookie: bool = False
+
     @property
     def cors_allowed_origins(self) -> list[str]:
         return [o.strip() for o in self.cors_allowed_origins_raw.split(",") if o.strip()]
@@ -119,7 +129,70 @@ class Settings(BaseSettings):
                     "Stooq는 개발·기술검증용이며 상업적 표시·재배포 권한이 확인되지 않았습니다. "
                     "선정된 상용 공급자가 아직 없으므로 지금은 'demo'만 허용됩니다."
                 )
+
+        if self.environment == "staging":
+            self._validate_staging_safety_policy()
         return self
+
+    def _validate_staging_safety_policy(self) -> None:
+        """로컬 스테이징이 실수로 dev DB·운영 DB에 연결되거나, 예시 비밀값을
+        그대로 쓴 채 기동되는 것을 막는다. 여기서 raise하면 앱이 기동되기
+        전에(Settings() 생성 시점) 즉시 실패한다 — docker_entrypoint.sh가
+        uvicorn을 exec하기 전 단계이므로, 헬스체크가 절대 healthy가 되지 않는다.
+        """
+        host = urlsplit(self.database_url).hostname or ""
+
+        if host != "staging-postgres":
+            raise ValueError(
+                "staging 환경에서는 DATABASE_URL의 호스트가 반드시 'staging-postgres'여야 "
+                f"합니다(현재: {host!r}). dev DB('postgres')나 운영 DB를 그대로 재사용하는 것을 "
+                "막기 위한 안전장치입니다 — docker-compose.staging.yml의 네트워크 별칭을 "
+                "확인하세요."
+            )
+
+        lowered_db_url = self.database_url.lower()
+        if "prod" in lowered_db_url:
+            raise ValueError(
+                "staging 환경의 DATABASE_URL에 'prod'로 보이는 문자열이 포함되어 있습니다 — "
+                "운영 DB에 잘못 연결하는 것을 막기 위해 기동을 거부합니다."
+            )
+
+        placeholder_secrets = ("change-me-in-env",)
+        if self.jwt_secret in placeholder_secrets or "change-me" in self.jwt_secret.lower():
+            raise ValueError(
+                "staging 환경에서도 JWT_SECRET에 예시 기본값을 그대로 쓸 수 없습니다 — "
+                ".env.staging에서 무작위 값으로 교체하세요(예: openssl rand -hex 32)."
+            )
+        if len(self.jwt_secret) < 16:
+            raise ValueError("staging 환경의 JWT_SECRET이 너무 짧습니다(16자 이상 필요).")
+
+        if not self.cookie_secure and not self.staging_allow_insecure_cookie:
+            raise ValueError(
+                "staging 환경에서 COOKIE_SECURE=false를 쓰려면 STAGING_ALLOW_INSECURE_COOKIE=true를 "
+                "함께 설정해야 합니다. 이는 '로컬 Docker Compose에서 순수 HTTP로만 테스트한다'는 "
+                "의도적 예외이며 절대 인터넷에 노출하면 안 됩니다 — 실제 HTTPS로 서빙되는 클라우드 "
+                "스테이징에서는 COOKIE_SECURE=true를 쓰세요."
+            )
+        if not self.cookie_secure and self.staging_allow_insecure_cookie:
+            logging.getLogger(__name__).warning(
+                "[staging] COOKIE_SECURE=false로 기동합니다 — 이는 로컬 전용 예외입니다. "
+                "이 인스턴스를 절대 인터넷에 노출하지 마세요(never expose to the internet)."
+            )
+            print(
+                "[staging] 경고: COOKIE_SECURE=false(로컬 전용) — 절대 인터넷에 노출하지 마세요.",
+                file=sys.stderr,
+            )
+
+        if not self.cors_allowed_origins:
+            raise ValueError("staging 환경에서는 CORS_ALLOWED_ORIGINS_RAW가 비어 있을 수 없습니다.")
+        for origin in self.cors_allowed_origins:
+            origin_host = urlsplit(origin).hostname or ""
+            if origin_host not in ("localhost", "127.0.0.1"):
+                raise ValueError(
+                    f"staging(로컬) 환경의 CORS_ALLOWED_ORIGINS_RAW에 loopback이 아닌 origin이 "
+                    f"있습니다: {origin!r} — 로컬 스테이징은 localhost/127.0.0.1에서만 접근 가능해야 "
+                    "합니다(외부 노출 금지)."
+                )
 
 
 @lru_cache
