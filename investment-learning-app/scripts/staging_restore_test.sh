@@ -31,7 +31,12 @@ VERIFY_USER="restore_verify"
 VERIFY_PASSWORD="restore-verify-local-only-$$"
 
 cleanup() {
-    docker rm -f "$VERIFY_CONTAINER" >/dev/null 2>&1 || true
+    # -v: 공식 postgres 이미지는 Dockerfile에 VOLUME /var/lib/postgresql/data를
+    # 선언해 두어서, -v 없이 docker run만 하면 익명 볼륨이 암묵적으로 만들어진다.
+    # --rm이 컨테이너가 "정상 종료"할 때는 이 익명 볼륨도 함께 치우지만, 이
+    # cleanup()은 스크립트가 중간에 실패해도(trap EXIT) 컨테이너를 강제로
+    # 지우는 경로라 -v를 명시해 성공/실패 여부와 무관하게 확실히 정리한다.
+    docker rm -f -v "$VERIFY_CONTAINER" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

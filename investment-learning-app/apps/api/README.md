@@ -272,11 +272,13 @@ HttpOnly 쿠키 기반 인증으로 전환했다.
   콘텐츠 블록(학습목표·본문·예시·핵심요약), 퀴즈 문항 조회(`GET /v1/quizzes/{id}` —
   정답 여부는 응답에 포함하지 않는다), 채점(정답 선택지 집합 비교, 오답 해설 포함),
   진도 기록, 서버 계산 XP(6.3 — 완료 이벤트당 1회만 지급, 일일 상한 적용). 콘텐츠는
-  1~15강이 시드되어 있다(6~15강 중 8개 PUBLISHED·2개는 검수 대기 중 DRAFT —
-  `docs/features/investment-lessons-06-15.md` 참고).
-  **아직 없는 것**: 콘텐츠 게시 승인 워크플로(초안→검수→승인, 11.1)는 status 필드
-  수준만 있고, 7일/28일 챌린지·배지·스트릭 보상 UI는 구현하지 않았다(스트릭 일수
-  자체는 `/me/learning-summary`에서 XP 지급일 기준으로 계산해 제공).
+  1~15강이 시드되어 있다(6~15강 10개는 시드 시점에 전부 `READY_FOR_REVIEW`
+  상태로 게시 전이다 — `docs/features/investment-lessons-06-15.md` 참고).
+  콘텐츠 게시 승인 워크플로(초안→검수→승인, 11.1)는 `scripts/publish_lesson.py`
+  운영자 전용 CLI + `lesson_review_audits` 감사기록으로 구현돼 있다(위 "게시된
+  콘텐츠 migration 롤백 주의사항" 절 참고) — 관리자 웹/CMS는 아직 없다(범위 밖).
+  **아직 없는 것**: 7일/28일 챌린지·배지·스트릭 보상 UI는 구현하지 않았다(스트릭
+  일수 자체는 `/me/learning-summary`에서 XP 지급일 기준으로 계산해 제공).
 - **journals** (`/v1/journals/*`, `/v1/me/journals`, `/v1/me/bias-report`) — 구현
   완료: 거래 전/후 일지, 목록·단건 조회(`GET /v1/me/journals`, `GET
   /v1/journals/{id}` — 명세서 9.2에 명시적 엔드포인트는 없지만 프런트엔드가 필요로
