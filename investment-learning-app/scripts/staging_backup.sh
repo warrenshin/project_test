@@ -21,8 +21,8 @@ mkdir -p "$BACKUP_DIR"
 TIMESTAMP="$(utc_timestamp)"
 OUT_FILE="$BACKUP_DIR/staging_${TIMESTAMP}.dump"
 
-POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)"
-POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)"
+POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
+POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
 POSTGRES_USER_VALUE="${POSTGRES_USER_VALUE:-staging_app}"
 POSTGRES_DB_VALUE="${POSTGRES_DB_VALUE:-investment_learning_staging}"
 

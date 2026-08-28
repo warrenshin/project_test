@@ -29,18 +29,47 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source scripts/_staging_lib.sh
 
+CI_FIXTURE_REVIEWER="ci-human-review-fixture"
+CI_FIXTURE_NOTE="CI 전용 fixture 게시 — 실제 사람 검수 아님 (.github/workflows/investment-learning-staging-published-lessons-e2e.yml)"
+
 EXECUTE=0
 REVIEWER=""
+CI_FIXTURE=0
 for arg in "$@"; do
     case "$arg" in
         --execute) EXECUTE=1 ;;
         --reviewer=*) REVIEWER="${arg#--reviewer=}" ;;
+        --ci-fixture) CI_FIXTURE=1 ;;
         *)
             echo "[오류] 알 수 없는 인자: $arg" >&2
             exit 1
             ;;
     esac
 done
+
+# --ci-fixture는 GitHub Actions 워크플로 전용이다 — 사람 운영자가 로컬에서
+# 실제 게시를 대신 승인하는 우회로가 되지 않도록 두 겹으로 막는다: (1) CI=true
+# (GitHub Actions가 자동으로 설정) 환경이 아니면 아예 거부, (2) --ci-fixture
+# 없이 --reviewer=ci-human-review-fixture를 직접 넘기는 것도 거부해, 이
+# "fixture" reviewer 이름을 흉내 낸 값이 --ci-fixture 경로를 거치지 않고는
+# 절대 감사기록에 남지 않게 한다.
+if [ "$CI_FIXTURE" -eq 1 ]; then
+    if [ -n "$REVIEWER" ]; then
+        echo "[오류] --ci-fixture와 --reviewer=를 함께 지정할 수 없습니다 — --ci-fixture는" >&2
+        echo "       reviewer/note 값을 스스로 고정합니다." >&2
+        exit 1
+    fi
+    if [ "${CI:-}" != "true" ]; then
+        echo "[오류] --ci-fixture는 CI 환경(CI=true)에서만 허용됩니다 — 로컬에서 실제 게시를" >&2
+        echo "       대신하는 용도로 쓰면 안 됩니다. 사람 검수자는 --reviewer=\"<실명>\"을 쓰세요." >&2
+        exit 1
+    fi
+    REVIEWER="$CI_FIXTURE_REVIEWER"
+elif [ "$REVIEWER" = "$CI_FIXTURE_REVIEWER" ]; then
+    echo "[오류] --reviewer=\"$CI_FIXTURE_REVIEWER\"는 예약된 CI 전용 fixture 이름입니다 —" >&2
+    echo "       --ci-fixture 플래그(그리고 CI=true 환경)를 통해서만 쓸 수 있습니다." >&2
+    exit 1
+fi
 
 require_staging_env_file
 assert_staging_database_url_is_safe
@@ -75,8 +104,8 @@ fi
 echo "[3/7] 최근 백업 확인됨: $LATEST_BACKUP (${BACKUP_AGE}초 전)"
 
 # 4) 현재 상태 조회
-POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)"
-POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)"
+POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
+POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
 POSTGRES_USER_VALUE="${POSTGRES_USER_VALUE:-staging_app}"
 POSTGRES_DB_VALUE="${POSTGRES_DB_VALUE:-investment_learning_staging}"
 
@@ -95,12 +124,18 @@ if [ "$EXECUTE" -ne 1 ]; then
     echo "[dry-run] --execute를 넘기지 않아 실제 게시는 수행하지 않았습니다."
     echo "[dry-run] 실제 실행하려면 사람 운영자가 검수를 마친 뒤 다음과 같이 실행하세요:"
     echo "  scripts/publish_reviewed_lessons_staging.sh --execute --reviewer=\"<이름>\""
+    echo "[dry-run] (CI 전용 fixture 게시는 --execute --ci-fixture — CI=true 환경에서만 허용됨)"
     exit 0
 fi
 
-if [ -z "$REVIEWER" ]; then
+if [ "$CI_FIXTURE" -ne 1 ] && [ -z "$REVIEWER" ]; then
     echo "[오류] --execute와 함께 --reviewer=\"<이름>\"을 반드시 지정해야 합니다." >&2
     exit 1
+fi
+
+PUBLISH_NOTE="로컬 스테이징 게시 절차(scripts/publish_reviewed_lessons_staging.sh)를 통한 승인"
+if [ "$CI_FIXTURE" -eq 1 ]; then
+    PUBLISH_NOTE="$CI_FIXTURE_NOTE"
 fi
 
 echo "[5/7] 강의를 하나씩 승인합니다 (lesson-12만 source-verified=false)..."
@@ -133,7 +168,7 @@ for CODE in $LESSON_CODES; do
         --content-version "$CONTENT_VERSION" \
         --reviewer "$REVIEWER" \
         --source-verified "$EXPECTED_VERIFIED" \
-        --note "로컬 스테이징 게시 절차(scripts/publish_reviewed_lessons_staging.sh)를 통한 승인"; then
+        --note "$PUBLISH_NOTE"; then
         echo "[오류] $CODE 승인 중 실패 — 이후 강의는 처리하지 않고 즉시 중단합니다." >&2
         exit 1
     fi
