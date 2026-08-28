@@ -32,6 +32,9 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
+  /* 강의 출처 URL처럼 공백 없이 이어진 긴 문자열이 좁은 화면에서 컨테이너를
+     뚫고 가로 스크롤을 유발하지 않도록 필요할 때만 단어 중간에서 줄바꿈한다. */
+  overflow-wrap: anywhere;
 }
 
 a {
