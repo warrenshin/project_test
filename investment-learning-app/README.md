@@ -447,6 +447,59 @@ bash scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="검수자
 않고 중단, 실행 후 상태·감사기록(`lesson_review_audits`) 재조회, 동일 명령
 재실행 시 이미 승인된 강의는 `publish_lesson.py` 자체의 멱등성 덕분에 건너뛴다.
 
+### 게시된 강의(lesson-06~15) 스테이징 E2E (Playwright)
+
+`apps/web/e2e-staging/`는 **이미 게시가 끝난 로컬 스테이징**을 대상으로 하는
+전용 Playwright 스펙이다. `apps/web/e2e/`(기존 개발용 E2E)와는 설정·테스트
+디렉터리·실행 명령이 전부 분리돼 있고 서로 절대 공유하지 않는다.
+
+| | 기존 개발 E2E (`apps/web/e2e/`) | 스테이징 E2E (`apps/web/e2e-staging/`) |
+|---|---|---|
+| 설정 파일 | `playwright.config.ts` | `playwright.staging.config.ts` |
+| 대상 | 자체 기동한 `next dev` + 자체 마이그레이션한 **개발 DB**(포트 3100/8100, `postgresql://app:app@localhost:5432/...`) | **이미 떠 있는 로컬 스테이징**(포트 3001/8001) — webServer를 전혀 기동하지 않는다 |
+| 전제 조건 | 매 실행 fresh DB(빈 상태에서 migrate) | 스테이징 DB가 **lesson-06~15 게시(PUBLISHED/REVIEWED) 완료** 상태여야 함 — 게시 전이면 목록·제목 검증이 실패한다 |
+| 실행 명령 | `npm run test:e2e` | `npm run test:e2e:staging` 또는 `scripts/staging_e2e_run.sh` |
+| 개발 포트(3000/8000/5432) 접근 | 함(그 자체가 대상) | 하지 않음 — 설정 로드 시점에 강제 차단 |
+| production/클라우드 접근 | 하지 않음 | 하지 않음 — `STAGING_E2E_ALLOW_REMOTE=true`를 명시하지 않는 한 localhost 외 URL은 즉시 거부 |
+
+**이미 실행 중인 로컬 스테이징을 대상으로 실행하는 명령** (스택을 재빌드·재시작하지
+않는다 — `scripts/staging_up.sh`로 이미 떠 있어야 한다):
+
+```bash
+# 권장: 게시 상태/감사기록이 실행 전후 동일한지까지 자동으로 대조하는 래퍼
+cd investment-learning-app
+bash scripts/staging_e2e_run.sh
+
+# 또는 Playwright만 직접 실행(웹앱 디렉터리 안에서)
+cd investment-learning-app/apps/web
+npm ci                         # 최초 1회
+npx playwright install --with-deps chromium   # 최초 1회
+npm run test:e2e:staging
+```
+
+기본 대상은 `http://localhost:3001`(web) / `http://localhost:8001`(API)이다.
+`STAGING_WEB_BASE_URL` / `STAGING_API_BASE_URL` 환경변수로 덮어쓸 수 있지만,
+localhost/127.0.0.1이 아닌 값이나 개발 포트(3000/8000/5432)를 주면 설정 로드
+시점에 즉시 에러로 중단된다(운영/클라우드 오접속 방지).
+
+**테스트 계정 데이터**: 매 실행 UUID 기반의 새 이메일(`staging-e2e-<태그>-<uuid>@example.com`)로만
+회원가입한다 — 기존 사용자나 기존 진도 데이터를 절대 재사용하지 않는다. 생성된
+테스트 계정과 그 진도·퀴즈 응시 기록은 **정리되지 않고 그대로 남는다** — 로컬
+스테이징은 필요하면 언제든 `scripts/staging_reset_data.sh --yes-delete-staging-data`로
+전체 초기화 가능한 일회성 데이터이므로 허용했다. UUID 기반 고유 이메일이라 기존
+데이터와 충돌하지 않는다. 이 스펙은 실제 투자 주문을 생성하지 않고,
+`lesson_review_audits`나 강의 게시 상태(`status`/`review_status`)를 직접 바꾸는
+API도 호출하지 않는다 — `scripts/staging_e2e_run.sh`가 실행 전후 두 값을
+읽기 전용 SELECT로 대조해 이를 보증한다.
+
+**CI fixture 게시 vs 실제 게시 승인**: `.github/workflows/investment-learning-staging-published-lessons-e2e.yml`은
+매 실행마다 완전히 새로운 일회용 스테이징을 기동해 `--reviewer="ci-human-review-fixture"`로
+강의를 게시한 뒤 이 E2E를 실행한다. **이 CI가 초록불이라는 것은 "게시 파이프라인이
+기술적으로 동작한다"는 뜻일 뿐, 실제 콘텐츠에 대한 사람의 검수·승인을 의미하지
+않는다.** 실제(로컬이든 향후 클라우드든) 게시는 반드시 사람 검수자가 본문·퀴즈를
+직접 읽고 `--reviewer="<실명>"`으로 스스로 실행해야 한다 — 위
+["강의(lesson-06~15) 게시 절차"](#강의lesson-06~15-게시-절차-로컬-스테이징) 참고.
+
 ### `COOKIE_SECURE=false` 예외 — 반드시 읽을 것
 
 `.env.staging.example`의 기본값은 `COOKIE_SECURE=false` +
@@ -470,6 +523,13 @@ bash scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="검수자
 운영되는 서버가 아니며, 실제 클라우드 스테이징을 대체하지 않는다. Repository
 secret은 쓰지 않는다 — `JWT_SECRET` 등은 매 실행마다 무작위로 새로 생성해
 로그에 마스킹 처리한다(`.github/scripts/generate_ci_staging_env.sh`).
+
+`.github/workflows/investment-learning-staging-published-lessons-e2e.yml`은 이
+워크플로의 **명확한 후속 단계**(별도 파일, main에서의 성공 이후 `workflow_run`으로
+연결됨)로, 매번 새로 기동한 일회용 스택에서 `--reviewer="ci-human-review-fixture"`로
+강의를 게시한 뒤 위 "게시된 강의 스테이징 E2E" 절의 Playwright 스펙을 실행하고
+항상 정리한다. 이 워크플로가 성공해도 실제 콘텐츠 게시 승인을 의미하지 않는다 —
+바로 위 "CI fixture 게시 vs 실제 게시 승인" 절 참고.
 
 ### 알려진 제한사항 (로컬 스테이징 범위)
 

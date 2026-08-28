@@ -1,0 +1,206 @@
+name: investment-learning-app Staging Published-Lessons E2E
+
+# 이 워크플로는 investment-learning-staging-ci.yml(기존 "Local Staging Compose
+# CI")의 명확한 후속 단계다 — 별도 워크플로 파일로 분리돼 있고, 그 워크플로가
+# main에서 성공적으로 끝난 뒤(workflow_run) 또는 이 워크플로 자신이 건드리는
+# 경로가 바뀌었을 때(push/pull_request) 실행된다. 두 워크플로는 서로 다른 job
+# 안에서 각자 완전히 새로운 일회용 staging 스택을 기동한다 — 서로의 컨테이너나
+# 볼륨을 공유하지 않는다.
+#
+# 여기서 하는 "게시"는 실제 사람 승인이 아니라 CI 전용 fixture다:
+#   --reviewer="ci-human-review-fixture"
+# 이 CI가 성공했다고 해서 실제(클라우드) 스테이징이나 운영에 콘텐츠를 게시해도
+# 된다는 뜻이 아니다. 실제 게시는 반드시 사람 검수자가 본문·퀴즈를 직접 읽고
+# scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="<실명>"을
+# 로컬에서 스스로 실행해야 한다(README "CI fixture 게시 vs 실제 게시 승인" 참고).
+#
+# GitHub repository secret을 쓰지 않는다. 모든 비밀값은 이 실행에서만 쓰는
+# 무작위 값이며(investment-learning-staging-ci.yml과 동일하게
+# generate_ci_staging_env.sh가 생성) 로그 마스킹에 등록한다. .env.staging,
+# DB 백업, pg_dump 산출물은 어떤 경우에도 artifact로 업로드하지 않는다.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "investment-learning-app/apps/web/e2e-staging/**"
+      - "investment-learning-app/apps/web/playwright.staging.config.ts"
+      - "investment-learning-app/scripts/staging_e2e_run.sh"
+      - "investment-learning-app/scripts/publish_reviewed_lessons_staging.sh"
+      - "investment-learning-app/scripts/verify_staging.sh"
+      - "investment-learning-app/scripts/_staging_lib.sh"
+      - "investment-learning-app/docker-compose.yml"
+      - "investment-learning-app/docker-compose.staging.yml"
+      - ".github/workflows/investment-learning-staging-published-lessons-e2e.yml"
+      - ".github/scripts/**"
+  pull_request:
+    paths:
+      - "investment-learning-app/apps/web/e2e-staging/**"
+      - "investment-learning-app/apps/web/playwright.staging.config.ts"
+      - "investment-learning-app/scripts/staging_e2e_run.sh"
+      - "investment-learning-app/scripts/publish_reviewed_lessons_staging.sh"
+      - "investment-learning-app/scripts/verify_staging.sh"
+      - "investment-learning-app/scripts/_staging_lib.sh"
+      - "investment-learning-app/docker-compose.yml"
+      - "investment-learning-app/docker-compose.staging.yml"
+      - ".github/workflows/investment-learning-staging-published-lessons-e2e.yml"
+      - ".github/scripts/**"
+  # investment-learning-staging-ci.yml("Local Staging Compose CI")이 main에서
+  # 성공한 직후를 "명확한 후속 단계"로 잇는다. 그 워크플로가 이미 검증한
+  # 게시-전(pre-publish) 스택 자체를 다시 신뢰하되, 이 job은 완전히 새로운
+  # 일회용 스택을 스스로 기동한다(컨테이너/볼륨을 공유하지 않음).
+  workflow_run:
+    workflows: ["investment-learning-app Local Staging Compose CI"]
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-published-lessons-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-and-e2e:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: investment-learning-app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 이 job은 CI 전용 fixture 게시만 수행함을 명시
+        run: |
+          echo "::notice::이 워크플로의 게시는 reviewer=ci-human-review-fixture로 실행되는 CI 전용 fixture다."
+          echo "::notice::CI 성공 == 실제 게시 승인이 아니다. 실제 게시는 사람 검수자가 로컬에서 --reviewer=<실명>으로 직접 실행해야 한다."
+
+      - name: "1) CI 전용 임시 .env.staging 생성 (repository secret 미사용, 값은 로그에 미노출)"
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/generate_ci_staging_env.sh"
+
+      - name: "1) 빈 staging volume으로 최초 기동"
+        run: bash scripts/staging_up.sh
+
+      - name: staging-postgres/staging-api healthy 대기
+        env:
+          COMPOSE_PROJECT_NAME: investment-learning-staging
+          COMPOSE_FILE: "docker-compose.yml:docker-compose.staging.yml"
+          COMPOSE_ENV_FILES: ".env.staging"
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" postgres 120
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" api 180
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_container_healthy.sh" web 180
+          docker compose ps
+
+      - name: "2) migration/seed 확인 (alembic head 일치 + 데모 종목 4개)"
+        run: |
+          bash "$GITHUB_WORKSPACE/.github/scripts/wait_for_http.sh" http://127.0.0.1:8001/health/ready "staging API /health/ready" 120
+          source scripts/_staging_lib.sh
+          POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' .env.staging | tail -n1 | cut -d= -f2-)"
+          POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' .env.staging | tail -n1 | cut -d= -f2-)"
+          DB_REV="$(staging_compose exec -T postgres psql -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" -tAc 'SELECT version_num FROM alembic_version;' | tr -d '[:space:]')"
+          HEAD_REV="$(staging_compose exec -T api alembic heads 2>/dev/null | awk '{print $1}' | tr -d '[:space:]')"
+          if [ -z "$DB_REV" ] || [ "$DB_REV" != "$HEAD_REV" ]; then
+            echo "::error::DB revision($DB_REV) != alembic head($HEAD_REV)"; exit 1
+          fi
+          INSTRUMENT_COUNT="$(staging_compose exec -T postgres psql -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" -tAc 'SELECT count(*) FROM instruments;' | tr -d '[:space:]')"
+          if [ "${INSTRUMENT_COUNT:-0}" -le 0 ]; then
+            echo "::error::데모 종목이 없습니다(count=$INSTRUMENT_COUNT)"; exit 1
+          fi
+          echo "migration/seed 확인됨: alembic=$DB_REV, instruments=$INSTRUMENT_COUNT"
+
+      - name: "3) 게시 전 전체 검증 (verify_staging.sh — health/migration/seed/노출/비밀정보/재시작 유지/backup+restore 포함)"
+        run: bash scripts/verify_staging.sh
+
+      - name: "4) 게시 직전 새 백업"
+        run: bash scripts/staging_backup.sh
+
+      - name: "5) 강의 게시 실행 (CI 전용 fixture reviewer — 실제 사람 승인 아님)"
+        run: |
+          bash scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="ci-human-review-fixture"
+
+      - name: "6) lesson-12 source_verified=false 확인, 나머지 9개는 true"
+        run: |
+          source scripts/_staging_lib.sh
+          POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' .env.staging | tail -n1 | cut -d= -f2-)"
+          POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' .env.staging | tail -n1 | cut -d= -f2-)"
+          run_sql() { staging_compose exec -T postgres psql -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" -tAc "$1"; }
+          LESSON12_VERIFIED="$(run_sql "SELECT source_verified FROM lesson_review_audits WHERE lesson_code='lesson-12' ORDER BY performed_at DESC LIMIT 1;")"
+          if [ "$LESSON12_VERIFIED" != "f" ]; then
+            echo "::error::lesson-12 source_verified가 false가 아닙니다(값=$LESSON12_VERIFIED)"; exit 1
+          fi
+          OTHER_TRUE_COUNT="$(run_sql "SELECT count(*) FROM lesson_review_audits WHERE lesson_code ~ '^lesson-(0[6-9]|1[0-3]|1[4-5])\$' AND lesson_code <> 'lesson-12' AND source_verified = true;")"
+          if [ "$OTHER_TRUE_COUNT" -ne 9 ]; then
+            echo "::error::lesson-12 제외 9개 강의의 source_verified=true 건수가 9가 아닙니다(count=$OTHER_TRUE_COUNT)"; exit 1
+          fi
+          echo "출처 정책 확인됨: lesson-12만 source_verified=false, 나머지 9개는 true"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: investment-learning-app/apps/web/package-lock.json
+
+      - name: 프런트엔드 의존성 설치 + Playwright 브라우저 설치
+        working-directory: investment-learning-app/apps/web
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: "7) 스테이징 전용 Playwright E2E 실행 (게시 상태/감사기록 실행 전후 무결성 대조 포함)"
+        run: bash scripts/staging_e2e_run.sh
+
+      - name: "8) 게시·감사기록·멱등성 확인 (동일 명령 재실행)"
+        run: |
+          bash scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="ci-human-review-fixture" | tee /tmp/publish_rerun.log
+          if ! grep -q "멱등" /tmp/publish_rerun.log; then
+            echo "::error::재실행 결과에 멱등 처리 로그가 없습니다 — 중복 게시가 발생했을 수 있습니다."; exit 1
+          fi
+          source scripts/_staging_lib.sh
+          POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' .env.staging | tail -n1 | cut -d= -f2-)"
+          POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' .env.staging | tail -n1 | cut -d= -f2-)"
+          run_sql() { staging_compose exec -T postgres psql -U "$POSTGRES_USER_VALUE" -d "$POSTGRES_DB_VALUE" -tAc "$1"; }
+          PUBLISHED_COUNT="$(run_sql "SELECT count(*) FROM lessons WHERE code ~ '^lesson-(0[6-9]|1[0-5])\$' AND status='PUBLISHED' AND review_status='REVIEWED';")"
+          AUDIT_COUNT="$(run_sql "SELECT count(*) FROM lesson_review_audits WHERE lesson_code ~ '^lesson-(0[6-9]|1[0-5])\$';")"
+          if [ "$PUBLISHED_COUNT" -ne 10 ] || [ "$AUDIT_COUNT" -ne 10 ]; then
+            echo "::error::재실행 후 PUBLISHED/REVIEWED=$PUBLISHED_COUNT(기대 10), 감사기록=$AUDIT_COUNT(기대 10)"; exit 1
+          fi
+          echo "멱등성 확인됨: PUBLISHED/REVIEWED=10, lesson_review_audits=10(중복 없음)"
+          rm -f /tmp/publish_rerun.log
+
+      - name: 최종 컨테이너 상태 확인
+        if: always()
+        run: |
+          docker compose --project-name investment-learning-staging --env-file .env.staging \
+            -f docker-compose.yml -f docker-compose.staging.yml ps
+
+      - name: "9) 실패 시 증거 로그 수집 (민감정보 제외 — cookie/token/password/.env/백업 미포함)"
+        if: failure()
+        run: |
+          COMPOSE="docker compose --project-name investment-learning-staging --env-file .env.staging -f docker-compose.yml -f docker-compose.staging.yml"
+          echo "--- compose ps ---"
+          $COMPOSE ps || true
+          echo "--- api 최근 로그 (300줄) ---"
+          $COMPOSE logs --tail=300 api || true
+          echo "--- web 최근 로그 (300줄) ---"
+          $COMPOSE logs --tail=300 web || true
+          echo "--- postgres 최근 로그 (100줄) ---"
+          $COMPOSE logs --tail=100 postgres || true
+
+      - name: Playwright 리포트 업로드 (실패 시에만, 스크린샷/트레이스 — 비밀정보 없음)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-published-lessons-e2e-report
+          path: |
+            investment-learning-app/apps/web/playwright-report/
+            investment-learning-app/apps/web/test-results/
+          retention-days: 7
+
+      - name: "10) CI 전용 container/volume 정리 (항상 실행)"
+        if: always()
+        run: bash scripts/staging_reset_data.sh --yes-delete-staging-data
