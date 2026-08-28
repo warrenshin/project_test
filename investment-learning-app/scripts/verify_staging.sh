@@ -20,6 +20,13 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source scripts/_staging_lib.sh
 set -e
 
+# .env.staging이 아예 없으면(오타로 다른 디렉터리에서 실행했거나, 아직
+# cp .env.staging.example .env.staging을 안 한 경우 등) 여기서 명확한 오류로
+# 즉시 중단한다 — 이전에는 이 확인이 없어서 grep이 "No such file or
+# directory"로 실패해도 `|| true`가 그 실패를 삼키고 기본 사용자로 넘어가
+# 원인과 무관한 psql 인증 오류만 나중에 나타났다.
+require_staging_env_file
+
 API_BASE="http://127.0.0.1:${STAGING_API_PORT:-8001}"
 WEB_BASE="http://127.0.0.1:${STAGING_WEB_PORT:-3001}"
 
@@ -32,10 +39,35 @@ run_sql() {
         psql -U "${POSTGRES_USER_VALUE}" -d "${POSTGRES_DB_VALUE}" -tAc "$1"
 }
 
-POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
-POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
-POSTGRES_USER_VALUE="${POSTGRES_USER_VALUE:-staging_app}"
-POSTGRES_DB_VALUE="${POSTGRES_DB_VALUE:-investment_learning_staging}"
+# $STAGING_ENV_FILE에서 KEY=값을 읽되, 경우를 명시적으로 구분한다(파일 자체가
+# 없는 경우는 위 require_staging_env_file이 이미 걸러냈으므로 여기서는
+# "파일은 있다"는 전제 위에서만 동작한다):
+#   - 파일에 KEY가 아예 없음      -> 지정된 기본값 사용
+#   - 파일에 KEY는 있는데 값이 빈 문자열 -> 지정된 기본값 사용(빈 값은 "설정 안 함"과 동일 취급)
+#   - 파일에 KEY=값이 있음        -> 그 값 그대로 사용
+resolve_staging_env_value() {
+    local key="$1" default_value="$2" line value
+    # 파일 자체는 require_staging_env_file이 이미 보장했으므로, 여기서 grep이
+    # 실패할 수 있는 유일한 이유는 "그 키가 없다"는 정상적인 케이스(c)뿐이다.
+    # pipefail 아래서는 이 "매치 없음"도 파이프라인 실패로 집계돼 set -e가
+    # 함수 안에서 스크립트를 즉시 끝내버리므로, 그 정상 케이스임을 명시하기
+    # 위해 || true로 받는다(파일이 없어서 실패하는 경우는 이 지점 이전에
+    # require_staging_env_file이 이미 걸러냈다).
+    line="$(grep -E "^${key}=" "$STAGING_ENV_FILE" | tail -n1)" || true
+    if [ -z "$line" ]; then
+        echo "$default_value"
+        return 0
+    fi
+    value="${line#*=}"
+    if [ -z "$value" ]; then
+        echo "$default_value"
+        return 0
+    fi
+    echo "$value"
+}
+
+POSTGRES_USER_VALUE="$(resolve_staging_env_value POSTGRES_USER staging_app)"
+POSTGRES_DB_VALUE="$(resolve_staging_env_value POSTGRES_DB investment_learning_staging)"
 
 echo "=== 1. dev Compose와 project name/volume 분리 확인 ==="
 if docker volume ls --format '{{.Name}}' | grep -qx "investment-learning-staging_postgres_data"; then

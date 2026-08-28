@@ -146,7 +146,12 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
           .map((block, idx) => (
             <div className="card" key={idx}>
               <h2>{BLOCK_LABEL[block.block_type] ?? block.block_type}</h2>
-              <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{block.content}</p>
+              <p
+                className={block.block_type === "SOURCE" ? "source-attribution" : undefined}
+                style={{ whiteSpace: "pre-wrap", margin: 0 }}
+              >
+                {block.content}
+              </p>
             </div>
           ))
       )}
