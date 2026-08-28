@@ -1,14 +1,25 @@
 name: investment-learning-app Staging Published-Lessons E2E
 
 # 이 워크플로는 investment-learning-staging-ci.yml(기존 "Local Staging Compose
-# CI")의 명확한 후속 단계다 — 별도 워크플로 파일로 분리돼 있고, 그 워크플로가
-# main에서 성공적으로 끝난 뒤(workflow_run) 또는 이 워크플로 자신이 건드리는
-# 경로가 바뀌었을 때(push/pull_request) 실행된다. 두 워크플로는 서로 다른 job
-# 안에서 각자 완전히 새로운 일회용 staging 스택을 기동한다 — 서로의 컨테이너나
-# 볼륨을 공유하지 않는다.
+# CI")의 명확한 후속 단계다 — 별도 워크플로 파일로 분리돼 있고, PR 리뷰 중에는
+# pull_request로, main 병합 후에는 그 워크플로가 성공한 직후 workflow_run으로
+# 실행된다. 두 워크플로는 서로 다른 job 안에서 각자 완전히 새로운 일회용
+# staging 스택을 기동한다 — 서로의 컨테이너나 볼륨을 공유하지 않는다.
+#
+# 예전에는 이 워크플로 자신의 push 트리거와 workflow_run 트리거가 main에
+# 대해 동시에 걸려, 같은 concurrency group을 두고 서로를 취소하는 일이
+# 실제로 발생했다(먼저 시작한 push 실행이 나중에 시작한 workflow_run 실행에
+# cancel-in-progress로 취소됨 — 결과 자체는 workflow_run 실행이 성공해 안전
+# 했지만 Actions 기록에 혼란을 주는 취소 실행이 남았다). "Local Staging
+# Compose CI"의 push 트리거가 이 워크플로의 모든 경로를 포함하는 상위집합
+# (apps/web/**, scripts/**)이라 push 트리거를 없애도 커버리지 공백은
+# 없다 — workflow_run 체이닝이 그대로 이어받는다.
 #
 # 여기서 하는 "게시"는 실제 사람 승인이 아니라 CI 전용 fixture다:
-#   --reviewer="ci-human-review-fixture"
+#   --ci-fixture (scripts/publish_reviewed_lessons_staging.sh — CI=true
+#   환경에서만 허용되고, reviewer/note 값을 스스로 고정한다. 사람이
+#   --reviewer="ci-human-review-fixture"를 직접 넘기는 우회도 스크립트
+#   자체가 거부한다.)
 # 이 CI가 성공했다고 해서 실제(클라우드) 스테이징이나 운영에 콘텐츠를 게시해도
 # 된다는 뜻이 아니다. 실제 게시는 반드시 사람 검수자가 본문·퀴즈를 직접 읽고
 # scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="<실명>"을
@@ -20,19 +31,6 @@ name: investment-learning-app Staging Published-Lessons E2E
 # DB 백업, pg_dump 산출물은 어떤 경우에도 artifact로 업로드하지 않는다.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "investment-learning-app/apps/web/e2e-staging/**"
-      - "investment-learning-app/apps/web/playwright.staging.config.ts"
-      - "investment-learning-app/scripts/staging_e2e_run.sh"
-      - "investment-learning-app/scripts/publish_reviewed_lessons_staging.sh"
-      - "investment-learning-app/scripts/verify_staging.sh"
-      - "investment-learning-app/scripts/_staging_lib.sh"
-      - "investment-learning-app/docker-compose.yml"
-      - "investment-learning-app/docker-compose.staging.yml"
-      - ".github/workflows/investment-learning-staging-published-lessons-e2e.yml"
-      - ".github/scripts/**"
   pull_request:
     paths:
       - "investment-learning-app/apps/web/e2e-staging/**"
@@ -48,7 +46,9 @@ on:
   # investment-learning-staging-ci.yml("Local Staging Compose CI")이 main에서
   # 성공한 직후를 "명확한 후속 단계"로 잇는다. 그 워크플로가 이미 검증한
   # 게시-전(pre-publish) 스택 자체를 다시 신뢰하되, 이 job은 완전히 새로운
-  # 일회용 스택을 스스로 기동한다(컨테이너/볼륨을 공유하지 않음).
+  # 일회용 스택을 스스로 기동한다(컨테이너/볼륨을 공유하지 않음). 이 워크플로
+  # 자신의 push 트리거는 의도적으로 두지 않았다(위 주석 참고) — main에 대한
+  # 실행은 이 workflow_run 경로 하나만 담당한다.
   workflow_run:
     workflows: ["investment-learning-app Local Staging Compose CI"]
     types: [completed]
@@ -73,10 +73,18 @@ jobs:
         working-directory: investment-learning-app
     steps:
       - uses: actions/checkout@v4
+        with:
+          # workflow_run 이벤트는 기본적으로 트리거 시점의 default branch HEAD를
+          # 체크아웃한다 — 업스트림 워크플로가 실제로 검증한 커밋(head_sha)이
+          # 아닐 수 있다("Local Staging Compose CI"가 커밋 A에서 성공한 뒤,
+          # 이 job이 뜨기 전에 커밋 B가 main에 더 push되면 B가 체크아웃된다).
+          # github.sha는 push/pull_request/workflow_dispatch에서는 원래도
+          # 올바른 값이므로, workflow_run일 때만 head_sha로 명시적으로 덮는다.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: 이 job은 CI 전용 fixture 게시만 수행함을 명시
         run: |
-          echo "::notice::이 워크플로의 게시는 reviewer=ci-human-review-fixture로 실행되는 CI 전용 fixture다."
+          echo "::notice::이 워크플로의 게시는 --ci-fixture로 실행되는 CI 전용 fixture다(reviewer=ci-human-review-fixture로 고정됨)."
           echo "::notice::CI 성공 == 실제 게시 승인이 아니다. 실제 게시는 사람 검수자가 로컬에서 --reviewer=<실명>으로 직접 실행해야 한다."
 
       - name: "1) CI 전용 임시 .env.staging 생성 (repository secret 미사용, 값은 로그에 미노출)"
@@ -121,7 +129,7 @@ jobs:
 
       - name: "5) 강의 게시 실행 (CI 전용 fixture reviewer — 실제 사람 승인 아님)"
         run: |
-          bash scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="ci-human-review-fixture"
+          bash scripts/publish_reviewed_lessons_staging.sh --execute --ci-fixture
 
       - name: "6) lesson-12 source_verified=false 확인, 나머지 9개는 true"
         run: |
@@ -156,7 +164,7 @@ jobs:
 
       - name: "8) 게시·감사기록·멱등성 확인 (동일 명령 재실행)"
         run: |
-          bash scripts/publish_reviewed_lessons_staging.sh --execute --reviewer="ci-human-review-fixture" | tee /tmp/publish_rerun.log
+          bash scripts/publish_reviewed_lessons_staging.sh --execute --ci-fixture | tee /tmp/publish_rerun.log
           if ! grep -q "멱등" /tmp/publish_rerun.log; then
             echo "::error::재실행 결과에 멱등 처리 로그가 없습니다 — 중복 게시가 발생했을 수 있습니다."; exit 1
           fi

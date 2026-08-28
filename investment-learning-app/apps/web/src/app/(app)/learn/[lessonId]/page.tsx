@@ -152,7 +152,7 @@ export default function LessonDetailPage({ params }: { params: Promise<{ lessonI
       )}
 
       {data.source && (
-        <p className="muted">
+        <p className="muted source-attribution">
           출처: {data.source_url ? <a href={data.source_url} target="_blank" rel="noreferrer">{data.source}</a> : data.source}
           {data.source_confirmed_at ? ` · 확인일 ${data.source_confirmed_at}` : ""}
           {data.reviewed_by ? ` · 감수: ${data.reviewed_by}` : ""}

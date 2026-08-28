@@ -32,8 +32,8 @@ run_sql() {
         psql -U "${POSTGRES_USER_VALUE}" -d "${POSTGRES_DB_VALUE}" -tAc "$1"
 }
 
-POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)"
-POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)"
+POSTGRES_USER_VALUE="$(grep -E '^POSTGRES_USER=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
+POSTGRES_DB_VALUE="$(grep -E '^POSTGRES_DB=' "$STAGING_ENV_FILE" | tail -n1 | cut -d= -f2-)" || true
 POSTGRES_USER_VALUE="${POSTGRES_USER_VALUE:-staging_app}"
 POSTGRES_DB_VALUE="${POSTGRES_DB_VALUE:-investment_learning_staging}"
 
