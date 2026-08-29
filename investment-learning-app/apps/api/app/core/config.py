@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,6 +18,21 @@ class Settings(BaseSettings):
     environment: str = "development"
 
     database_url: str = "postgresql+psycopg://app:app@localhost:5432/investment_learning"
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_database_url_driver(cls, v: str) -> str:
+        """일부 호스팅 제공자(Render/Heroku 등)는 DATABASE_URL을 `postgres://` 또는
+        `postgresql://` 스킴으로 준다 — 둘 다 SQLAlchemy 기본값인 psycopg2를
+        가리키는데, 이 프로젝트는 psycopg2가 아니라 psycopg(3)만 설치돼 있으므로
+        (requirements.txt) 그대로 두면 기동 시 ModuleNotFoundError가 난다. 드라이버를
+        명시하지 않은 경우에만 `+psycopg`를 붙여 정규화한다."""
+        if v.startswith("postgres://"):
+            return "postgresql+psycopg://" + v[len("postgres://") :]
+        if v.startswith("postgresql://"):
+            return "postgresql+psycopg://" + v[len("postgresql://") :]
+        return v
+
     redis_url: str = "redis://localhost:6379/0"
 
     jwt_secret: str = "change-me-in-env"
